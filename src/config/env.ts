@@ -12,6 +12,7 @@ const envSchema = z.object({
     .refine((value) => new URL(value).protocol === "https:", "PUBLIC_URL must use HTTPS")
     .optional(),
   WIREBOT_TUNNEL: z.enum(["auto", "off"]).default("auto"),
+  WIREBOT_CONTAINER: z.enum(["0", "1"]).default("0"),
   WIREBOT_DATA_DIR: z.string().min(1).default(".wirebot"),
   WIREBOT_TOOLCHAINS_DIR: z.string().min(1).optional(),
   WIREBOT_ASSETS_DIR: z.string().min(1).optional(),
@@ -28,6 +29,7 @@ interface AppConfig {
   readonly telegramPollTimeout: number;
   readonly publicUrl: string | undefined;
   readonly tunnelMode: "auto" | "off";
+  readonly container: boolean;
   readonly dataDirectory: string;
   readonly toolchainsDirectory: string | undefined;
   readonly assetsDirectory: string | undefined;
@@ -52,6 +54,7 @@ export function loadAppConfig(environment: NodeJS.ProcessEnv = process.env): App
     telegramPollTimeout: parsed.TELEGRAM_POLL_TIMEOUT,
     publicUrl: parsed.PUBLIC_URL?.replace(/\/$/, ""),
     tunnelMode: parsed.WIREBOT_TUNNEL,
+    container: parsed.WIREBOT_CONTAINER === "1",
     dataDirectory: resolve(parsed.WIREBOT_DATA_DIR),
     toolchainsDirectory:
       parsed.WIREBOT_TOOLCHAINS_DIR === undefined

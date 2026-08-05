@@ -143,6 +143,8 @@ type ExplicitSkillInputProvider = (
 interface CodexServiceProviders {
   readonly effectiveSettings?: EffectiveCodexSettingsProvider;
   readonly explicitSkillInputs?: ExplicitSkillInputProvider;
+  /** Static deployment-environment context added to every turn (e.g. the container persistence contract). */
+  readonly environmentContext?: ApplicationContext;
 }
 
 export class CodexService {
@@ -163,6 +165,7 @@ export class CodexService {
   readonly #remoteClientContextEnabled: () => boolean;
   readonly #effectiveSettings: EffectiveCodexSettingsProvider;
   readonly #explicitSkillInputs: ExplicitSkillInputProvider;
+  readonly #environmentContext: ApplicationContext | undefined;
   #pauseGate: Deferred<void> | undefined;
   #idleGate: Deferred<void> | undefined;
   #interruptingScheduledTurns = false;
@@ -194,6 +197,7 @@ export class CodexService {
     this.#remoteClientContextEnabled = remoteClientContextEnabled;
     this.#effectiveSettings = providers.effectiveSettings ?? (() => ({}));
     this.#explicitSkillInputs = providers.explicitSkillInputs ?? (() => []);
+    this.#environmentContext = providers.environmentContext;
     rpc.onNotification((notification) => this.handleNotification(notification));
     rpc.onExit((exit) => this.handleTransportExit(exit.error));
     rpc.setServerRequestHandler(async (request) => await this.handleServerRequest(request));
@@ -660,6 +664,7 @@ export class CodexService {
   ): ApplicationContext {
     return {
       ...(this.#remoteClientContextEnabled() ? createRemoteClientContext(connector) : {}),
+      ...(this.#environmentContext ?? {}),
       ...(invocation.additionalContext ?? {}),
     };
   }
@@ -964,6 +969,32 @@ Host-local UI is not visible or accessible to the user:
 - Explicitly link files intended for the user in the final response so Wirebot can deliver them.
 
 All normal Codex filesystem, shell, network, approval, and project behavior remains unchanged. Wirebot changes only how the user communicates with Codex.`,
+    },
+  };
+}
+
+/**
+ * The persistence contract for the official Wirebot container image. The
+ * paths listed here mirror the image layout in Dockerfile/entrypoint.sh —
+ * update both together.
+ */
+export function createContainerEnvironmentContext(): ApplicationContext {
+  return {
+    "wirebot.environment": {
+      kind: "application",
+      value: `This session runs inside the Wirebot container, an Ubuntu-based image dedicated to this user. You have a normal Linux machine with passwordless sudo and common tools preinstalled (ffmpeg, git, python3, build tools, and more).
+
+The operator updates Wirebot by replacing the container image, which resets the filesystem. Only these locations are persistent — they live on a mounted volume and survive every update:
+- the Codex workspace and your home directory,
+- /usr/local (a symlink into the volume) for manually installed software,
+- /home/linuxbrew for a Homebrew installation, if one is set up.
+
+Everything else resets on update. In particular, packages installed with apt disappear. Choose installation targets accordingly:
+- apt-get is fine for one-off needs in the current session.
+- When the user wants a tool to stay available, install it into /usr/local (static binaries, make install), the home directory (uv, pipx, cargo, npm prefix), or via Homebrew.
+- Keep long-lived configuration (dotfiles, git config, SSH keys) in the home directory, where it persists.
+
+There is no systemd in this container. Processes you start do not survive restarts; use Wirebot scheduled runs when something must be checked or re-established periodically.`,
     },
   };
 }

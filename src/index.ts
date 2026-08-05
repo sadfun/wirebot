@@ -6,7 +6,7 @@ import { TelegramChannel } from "./channels/telegram/channel.js";
 import { CodexConfigService } from "./codex/config-service.js";
 import { CodexAppServer } from "./codex/rpc.js";
 import { CodexRuntimeService } from "./codex/runtime-service.js";
-import { CodexService } from "./codex/service.js";
+import { CodexService, createContainerEnvironmentContext } from "./codex/service.js";
 import { CodexToolchainManager, pinnedCodexVersion } from "./codex/toolchain.js";
 import { loadAppConfig } from "./config/env.js";
 import { CodexBridge } from "./core/bridge.js";
@@ -23,13 +23,21 @@ import { wirebotVersion } from "./shared/version.js";
 import { ChatGptVoiceTranscriber } from "./transcription/service.js";
 import { CurlImpersonateTransport } from "./transcription/transport.js";
 
-const defaultConfig = `# Managed by Wirebot. You can edit this file or use the Telegram Mini App.
+/**
+ * Inside the Wirebot container the container boundary is the sandbox, and the
+ * agent is expected to manage the whole machine (apt, /usr/local, services),
+ * so Codex's own command sandbox is off. Elsewhere the Codex default of
+ * workspace-write stays.
+ */
+function defaultCodexConfig(container: boolean): string {
+  return `# Managed by Wirebot. You can edit this file or use the Telegram Mini App.
 approval_policy = "on-request"
-sandbox_mode = "workspace-write"
+sandbox_mode = "${container ? "danger-full-access" : "workspace-write"}"
 web_search = "live"
 cli_auth_credentials_store = "file"
 project_root_markers = []
 `;
+}
 
 interface Stoppable {
   stop(): Promise<void>;
@@ -55,7 +63,7 @@ export async function runWirebot(): Promise<void> {
       ensureDirectory(codexHome),
       ensureDirectory(outboundDirectory),
     ]);
-    await ensureDefaultCodexConfig(join(codexHome, "config.toml"));
+    await ensureDefaultCodexConfig(join(codexHome, "config.toml"), config.container);
 
     const toolchains = new CodexToolchainManager(
       toolchainsDirectory,
@@ -113,6 +121,7 @@ export async function runWirebot(): Promise<void> {
       {
         effectiveSettings: () => liveRuntime?.settings() ?? {},
         explicitSkillInputs: (text) => liveRuntime?.skillInputs(text) ?? [],
+        ...(config.container ? { environmentContext: createContainerEnvironmentContext() } : {}),
       },
     );
     const configService = new CodexConfigService(rpc, config.workspace);
@@ -212,7 +221,7 @@ export async function runWirebot(): Promise<void> {
   }
 }
 
-async function ensureDefaultCodexConfig(path: string): Promise<void> {
+async function ensureDefaultCodexConfig(path: string, container: boolean): Promise<void> {
   try {
     await access(path);
     const contents = await readFile(path, "utf8");
@@ -232,7 +241,7 @@ async function ensureDefaultCodexConfig(path: string): Promise<void> {
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    await atomicWriteFile(path, defaultConfig);
+    await atomicWriteFile(path, defaultCodexConfig(container));
   }
 }
 
