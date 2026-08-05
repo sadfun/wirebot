@@ -29,6 +29,7 @@ Initial Wirebot release, forked from [Telex](https://github.com/sadfun/telex) 0.
 - Inside the container the agent runs as an unprivileged user with passwordless sudo, Wirebot is PID 1 under tini, and Codex's default sandbox is `danger-full-access` — the container boundary is the sandbox. Source runs keep the `workspace-write` default.
 - The runtime is Bun: releases are a single compiled executable built with bytecode compilation, minification, and embedded sourcemaps; the app version and Codex pin embed at build time; the Mini App client bundles with `Bun.build`.
 - The pinned Codex CLI installs from the npm registry's platform tarball, verified against the registry integrity digest, and Wirebot spawns the native vendored binary directly — Node and npm are no longer needed anywhere. Pinned toolchains (Codex, cloudflared, curl-impersonate) are baked into the image; source runs still download them on demand. Install markers record the platform target so a data volume cannot serve wrong-architecture binaries.
+- The pinned voice transport is curl-impersonate 2.0.0 (curl 8.21.0).
 
 ### Fixed
 

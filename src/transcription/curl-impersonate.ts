@@ -10,9 +10,9 @@ import { runCommand } from "../shared/process.js";
 /**
  * Pinned browser-fingerprinted transport used for ChatGPT dictation. The
  * checksums are GitHub's published SHA-256 asset digests for
- * https://github.com/lexiforest/curl-impersonate/releases/tag/v1.5.6.
+ * https://github.com/lexiforest/curl-impersonate/releases/tag/v2.0.0.
  */
-export const curlImpersonateVersion = "1.5.6";
+export const curlImpersonateVersion = "2.0.0";
 export const curlImpersonateTarget = "chrome146";
 
 interface CurlImpersonateAsset {
@@ -22,22 +22,22 @@ interface CurlImpersonateAsset {
 
 const assets: Readonly<Record<string, CurlImpersonateAsset>> = {
   "darwin-arm64": {
-    name: "curl-impersonate-v1.5.6.arm64-macos.tar.gz",
-    sha256: "8960639189747306262fd26cfdc3f5ece52c300257c448a2171252c1060f3f04",
+    name: "curl-impersonate-v2.0.0.arm64-macos.tar.gz",
+    sha256: "deda8cef7a7ec05f4a56e67d10e7faaf0bf2d200d3bef1043cdc0fded7f10d0e",
   },
   "darwin-x64": {
-    name: "curl-impersonate-v1.5.6.x86_64-macos.tar.gz",
-    sha256: "e652f640ec5865b70ee409d76769193bb8caf4b6d4b714727807f74428b46908",
+    name: "curl-impersonate-v2.0.0.x86_64-macos.tar.gz",
+    sha256: "4588e32ac5a3fde7f8a3922653e81e5232b94990cf8298c1f26102bb5b0f720b",
   },
   // The musl builds are statically linked, so the same assets work on glibc
   // and musl distributions without adding host-library requirements.
   "linux-arm64": {
-    name: "curl-impersonate-v1.5.6.aarch64-linux-musl.tar.gz",
-    sha256: "09705dbc58b9df3fc522e59b17929cc5f45f1f76bcff72d92914066fce7b0986",
+    name: "curl-impersonate-v2.0.0.aarch64-linux-musl.tar.gz",
+    sha256: "38d3822a40db1897f4e1f2d763669dbce1e76019d9d884e615ce3500a0faca2c",
   },
   "linux-x64": {
-    name: "curl-impersonate-v1.5.6.x86_64-linux-musl.tar.gz",
-    sha256: "186140c3567c1ace7d0cac4703eb9e47ce6984956f8cc623e404a094e788b602",
+    name: "curl-impersonate-v2.0.0.x86_64-linux-musl.tar.gz",
+    sha256: "0f3723efb8b5a8712104bcc9b6f617826f646b8efdcafa22b39ca6bc9820f2d0",
   },
 };
 
