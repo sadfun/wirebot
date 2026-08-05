@@ -157,7 +157,7 @@ export interface CodexServiceProviders {
     request: ChatgptAuthTokensRefreshParams,
   ) => Promise<ChatgptAuthTokensRefreshResponse>;
   readonly now?: () => number;
-  /** Passive lifecycle observer used by isolated E2E tracing. */
+  /** Passive lifecycle observer for test harnesses. */
   readonly onTurnStarting?: (threadId: string, conversationKey: string) => void;
 }
 

@@ -303,7 +303,7 @@ async function applyProtocol(
     await atomicWriteFile(versionPath, `${candidateVersion}\n`);
     await runCommand(
       join(projectRoot, "node_modules", ".bin", "tsc"),
-      ["-p", join(projectRoot, "tsconfig.test.json")],
+      ["-p", join(projectRoot, "tsconfig.json")],
       { cwd: projectRoot, env: externalProcessEnvironment() },
     );
     if (movedCurrent) await rm(backup, { recursive: true, force: true });

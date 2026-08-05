@@ -74,7 +74,7 @@ export const telegramBotCommands: readonly BotCommand[] = botCommands.map((entry
 }));
 
 export interface TelegramChannelOptions {
-  /** Narrow E2E-only exception; ordinary bot senders remain denied by default. */
+  /** Narrow test-harness exception; ordinary bot senders remain denied by default. */
   readonly allowedBotUserIds?: ReadonlySet<number>;
 }
 
