@@ -78,7 +78,7 @@ interface ReconcileOptions {
 }
 
 /**
- * Keeps Telex's long-lived app-server synchronized through Codex's native
+ * Keeps Wirebot's long-lived app-server synchronized through Codex's native
  * config, MCP, and skill protocol surface.
  */
 export class CodexRuntimeService {

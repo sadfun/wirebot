@@ -29,12 +29,12 @@ jobs:
         run: |
           version=$(node -p 'require("./package.json").version')
           npm prune --omit=dev
-          mkdir -p "release/telex-$version"
-          cp -R dist node_modules "release/telex-$version/"
-          cp package.json package-lock.json codex.version README.md LICENSE.md .env.example "release/telex-$version/"
-          tar -C "release/telex-$version" -czf "release/telex-$version.tar.gz" .
+          mkdir -p "release/wirebot-$version"
+          cp -R dist node_modules "release/wirebot-$version/"
+          cp package.json package-lock.json codex.version README.md LICENSE.md .env.example "release/wirebot-$version/"
+          tar -C "release/wirebot-$version" -czf "release/wirebot-$version.tar.gz" .
           cd release
-          sha256sum "telex-$version.tar.gz" > "telex-$version.tar.gz.sha256"
+          sha256sum "wirebot-$version.tar.gz" > "wirebot-$version.tar.gz.sha256"
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -43,9 +43,9 @@ jobs:
           release_flags=()
           if [[ "$version" == *-* ]]; then release_flags+=(--prerelease); fi
           gh release create "$GITHUB_REF_NAME" \
-            "release/telex-$version.tar.gz" \
-            "release/telex-$version.tar.gz.sha256" \
+            "release/wirebot-$version.tar.gz" \
+            "release/wirebot-$version.tar.gz.sha256" \
             --verify-tag \
             --generate-notes \
-            --title "Telex $version" \
+            --title "Wirebot $version" \
             "${release_flags[@]}"

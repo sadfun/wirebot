@@ -43,7 +43,7 @@ export class CodexToolchainManager {
   public async ensureVersion(version: string): Promise<string> {
     registryPackageSchema.shape.version.parse(version);
     const versionDirectory = join(this.#toolchainsDirectory, version);
-    const markerPath = join(versionDirectory, ".telex-install.json");
+    const markerPath = join(versionDirectory, ".wirebot-install.json");
     const binaryPath = this.binaryPath(versionDirectory);
     if (await this.installIsReady(markerPath, binaryPath, version)) return binaryPath;
 

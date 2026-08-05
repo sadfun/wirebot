@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TelexSettingsStore } from "../src/core/settings-store.js";
+import { WirebotSettingsStore } from "../src/core/settings-store.js";
 import type { Logger } from "../src/shared/logger.js";
 
 const temporaryDirectories: string[] = [];
@@ -15,10 +15,10 @@ afterEach(async () => {
   );
 });
 
-describe("TelexSettingsStore", () => {
+describe("WirebotSettingsStore", () => {
   it("defaults remote client context to enabled", async () => {
     const path = join(await temporaryDirectory(), "settings.json");
-    const store = new TelexSettingsStore(path, testLogger());
+    const store = new WirebotSettingsStore(path, testLogger());
 
     await store.load();
 
@@ -27,7 +27,7 @@ describe("TelexSettingsStore", () => {
 
   it("persists changes across instances", async () => {
     const path = join(await temporaryDirectory(), "settings.json");
-    const first = new TelexSettingsStore(path, testLogger());
+    const first = new WirebotSettingsStore(path, testLogger());
     await first.load();
     await first.update({ remoteClientContext: false });
 
@@ -36,7 +36,7 @@ describe("TelexSettingsStore", () => {
       remoteClientContext: false,
     });
 
-    const second = new TelexSettingsStore(path, testLogger());
+    const second = new WirebotSettingsStore(path, testLogger());
     await second.load();
     expect(second.read()).toEqual({ remoteClientContext: false });
   });
@@ -46,7 +46,7 @@ describe("TelexSettingsStore", () => {
     const path = join(directory, "settings.json");
     await writeFile(path, JSON.stringify({ version: 1, remoteClientContext: "no" }));
     const logger = testLogger();
-    const store = new TelexSettingsStore(path, logger);
+    const store = new WirebotSettingsStore(path, logger);
 
     await store.load();
 
@@ -56,7 +56,7 @@ describe("TelexSettingsStore", () => {
 });
 
 async function temporaryDirectory(): Promise<string> {
-  const path = await mkdtemp(join(tmpdir(), "telex-settings-store-"));
+  const path = await mkdtemp(join(tmpdir(), "wirebot-settings-store-"));
   temporaryDirectories.push(path);
   return path;
 }

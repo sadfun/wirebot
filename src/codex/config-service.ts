@@ -641,7 +641,7 @@ function toModelCapability(model: Model): ModelCapability {
   };
 }
 
-/** Telex is OpenAI-official-API-only; offer the builtin provider plus the one Codex runs with. */
+/** Wirebot is OpenAI-official-API-only; offer the builtin provider plus the one Codex runs with. */
 function toModelProviderCapabilities(response: ConfigReadResponse): ModelProviderCapability[] {
   const providers: ModelProviderCapability[] = [
     {

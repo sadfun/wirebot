@@ -1,7 +1,7 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.4/schema.json",
   "files": {
-    "includes": ["**", "!src/generated/codex", "!dist", "!node_modules", "!.telex"]
+    "includes": ["**", "!src/generated/codex", "!dist", "!node_modules", "!.wirebot"]
   },
   "formatter": {
     "enabled": true,

@@ -185,8 +185,8 @@ export class CodexAppServer {
         method: "initialize",
         params: {
           clientInfo: {
-            name: "telex",
-            title: "Telex",
+            name: "wirebot",
+            title: "Wirebot",
             version: this.#clientVersion,
           },
           capabilities: {

@@ -110,7 +110,7 @@ export function nextOccurrence(schedule: AutomationSchedule, after: Date): Date 
     candidateChecks += 1;
     if (candidateChecks > maximumCandidateChecks) {
       throw new RecurrenceError(
-        "RRULE exceeds Telex's bounded recurrence work limit; use a simpler cadence or smaller BY lists",
+        "RRULE exceeds Wirebot's bounded recurrence work limit; use a simpler cadence or smaller BY lists",
       );
     }
     const candidate = new Date(cursor);

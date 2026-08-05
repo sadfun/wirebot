@@ -90,7 +90,7 @@ function fakeTransport(
 }
 
 async function temporaryCodexHome(accessToken: string): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "telex-transcription-"));
+  const directory = await mkdtemp(join(tmpdir(), "wirebot-transcription-"));
   temporaryDirectories.push(directory);
   await mkdir(directory, { recursive: true });
   await writeAuth(directory, accessToken);

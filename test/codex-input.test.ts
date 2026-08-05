@@ -42,7 +42,7 @@ Telegram files available in the local workspace:
 
   it("keeps the original voice attachment alongside its transcript", () => {
     expect(
-      createTurnInput("Voice message transcript:\nHello Telex.", "telegram", [
+      createTurnInput("Voice message transcript:\nHello Wirebot.", "telegram", [
         {
           kind: "voice",
           path: "/workspace/voice.ogg",
@@ -53,7 +53,7 @@ Telegram files available in the local workspace:
       {
         type: "text",
         text: `Voice message transcript:
-Hello Telex.
+Hello Wirebot.
 
 Telegram files available in the local workspace:
 - Telegram voice message: "/workspace/voice.ogg"`,
@@ -85,14 +85,14 @@ describe("createRemoteClientContext", () => {
     const telegram = createRemoteClientContext("telegram");
     const discord = createRemoteClientContext("discord");
 
-    expect(telegram["telex.remote-client"]).toMatchObject({
+    expect(telegram["wirebot.remote-client"]).toMatchObject({
       kind: "application",
       value: expect.stringContaining("reads and replies through Telegram"),
     });
-    expect(discord["telex.remote-client"]).toMatchObject({
+    expect(discord["wirebot.remote-client"]).toMatchObject({
       kind: "application",
       value: expect.stringContaining("reads and replies through Discord"),
     });
-    expect(discord["telex.remote-client"]?.value).not.toContain("Telegram");
+    expect(discord["wirebot.remote-client"]?.value).not.toContain("Telegram");
   });
 });

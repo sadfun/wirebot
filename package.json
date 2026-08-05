@@ -1,23 +1,23 @@
 {
-  "name": "telex",
+  "name": "wirebot",
   "version": "0.0.28",
   "private": true,
   "type": "module",
-  "description": "Telex — a Telegram bridge for the OpenAI Codex app-server.",
+  "description": "Wirebot — a Telegram bridge for the OpenAI Codex app-server.",
   "license": "FSL-1.1-MIT",
-  "homepage": "https://github.com/sadfun/telex#readme",
+  "homepage": "https://github.com/sadfun/wirebot#readme",
   "bugs": {
-    "url": "https://github.com/sadfun/telex/issues"
+    "url": "https://github.com/sadfun/wirebot/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sadfun/telex.git"
+    "url": "git+https://github.com/sadfun/wirebot.git"
   },
   "engines": {
     "node": ">=24.0.0"
   },
   "bin": {
-    "telex": "./dist/cli/main.js"
+    "wirebot": "./dist/cli/main.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node dist/cli/copy-assets.js && tailwindcss -i ./src/miniapp/styles.css -o ./dist/miniapp/public/app.css --minify",

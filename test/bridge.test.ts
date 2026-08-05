@@ -368,7 +368,7 @@ describe("CodexBridge scheduled-run routing", () => {
     const replyTo = providerReference("message", "reply-1");
     const deliveryTarget = providerReference("destination", "target-1");
     const applicationContext = {
-      "telex.scheduled-result": { kind: "application" as const, value: "Complete result" },
+      "wirebot.scheduled-result": { kind: "application" as const, value: "Complete result" },
     };
     const scheduledRuns = stubScheduledRuns({
       contextForReply: vi.fn(async () => applicationContext),

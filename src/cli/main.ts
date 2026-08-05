@@ -4,7 +4,7 @@ import { checkCodexProtocol, formatProtocolCheck } from "../codex/protocol-upgra
 import { errorMessage } from "../shared/errors.js";
 import { projectRootFrom } from "../shared/fs.js";
 import { Logger } from "../shared/logger.js";
-import { readTelexVersion } from "../shared/version.js";
+import { readWirebotVersion } from "../shared/version.js";
 
 interface CodexCheckArguments {
   readonly version: string;
@@ -12,9 +12,9 @@ interface CodexCheckArguments {
 }
 
 const usage = `Usage:
-  telex start
-  telex version
-  telex codex check [--version latest|VERSION] [--apply]
+  wirebot start
+  wirebot version
+  wirebot codex check [--version latest|VERSION] [--apply]
 
 Codex protocol checks are maintainer commands for updating the separately
 pinned Codex CLI.`;
@@ -28,13 +28,13 @@ async function main(args: readonly string[]): Promise<number> {
   switch (args[0]) {
     case "start": {
       if (args.length !== 1) throw new Error(usage);
-      const { runTelex } = await import("../index.js");
-      await runTelex();
+      const { runWirebot } = await import("../index.js");
+      await runWirebot();
       return 0;
     }
     case "version": {
       if (args.length !== 1) throw new Error(usage);
-      console.log(await readTelexVersion(projectRootFrom(import.meta.url)));
+      console.log(await readWirebotVersion(projectRootFrom(import.meta.url)));
       return 0;
     }
     case "codex":

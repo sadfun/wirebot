@@ -16,7 +16,7 @@ import type {
 } from "./channel.js";
 
 const introText =
-  "👋 Hi, I'm Telex. Send me a message and I'll hand it to Codex, then stream progress and results back into this chat.";
+  "👋 Hi, I'm Wirebot. Send me a message and I'll hand it to Codex, then stream progress and results back into this chat.";
 
 /**
  * The single source for the user-facing command list: /help and the Telegram
@@ -27,7 +27,7 @@ export const botCommands: readonly {
   readonly menuDescription: string;
   readonly help: string;
 }[] = [
-  { command: "start", menuDescription: "Set up Telex", help: "show setup and sign-in help" },
+  { command: "start", menuDescription: "Set up Wirebot", help: "show setup and sign-in help" },
   { command: "new", menuDescription: "Start a new Codex task", help: "start a fresh Codex task" },
   {
     command: "back",
@@ -225,7 +225,7 @@ export class CodexBridge {
         if (!(await this.requirePrivateChat(message))) return;
         if (this.#publicUrl === undefined) {
           await message.responder.sendText(
-            "The settings Mini App is disabled. Set PUBLIC_URL to its public HTTPS origin, or leave TELEX_TUNNEL=auto and restart with network access for an automatic quick tunnel.",
+            "The settings Mini App is disabled. Set PUBLIC_URL to its public HTTPS origin, or leave WIREBOT_TUNNEL=auto and restart with network access for an automatic quick tunnel.",
           );
           return;
         }

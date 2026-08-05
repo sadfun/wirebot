@@ -137,7 +137,7 @@ export class ThreadSession {
   }
 
   /**
-   * Park a presentation for a turn Telex is about to start. Starting new work
+   * Park a presentation for a turn Wirebot is about to start. Starting new work
    * supersedes an earlier stop request.
    */
   public expectTurn(presentation: TurnPresentation): PendingTurnStart {
@@ -158,7 +158,7 @@ export class ThreadSession {
     return this.#views.get(turnId);
   }
 
-  /** Fallback presenter for approvals on turns Telex did not start. */
+  /** Fallback presenter for approvals on turns Wirebot did not start. */
   public defaultResponder(): MessageResponder | undefined {
     return this.#defaultResponder;
   }

@@ -35,7 +35,7 @@ export class CurlImpersonateTransport implements TranscriptionTransport {
 
   public async transcribe(request: TranscriptionRequest): Promise<TranscriptionResponse> {
     const binary = await this.binary();
-    const delimiter = `--telex-http-status-${crypto.randomUUID()}--`;
+    const delimiter = `--wirebot-http-status-${crypto.randomUUID()}--`;
     const result = await runCurl(
       binary,
       [
@@ -61,7 +61,7 @@ export class CurlImpersonateTransport implements TranscriptionTransport {
       [
         curlConfigHeader("Authorization", `Bearer ${request.accessToken}`),
         curlConfigHeader("ChatGPT-Account-Id", request.accountId),
-        curlConfigHeader("originator", "Telex"),
+        curlConfigHeader("originator", "Wirebot"),
         curlConfigHeader("accept", "application/json"),
       ].join("\n"),
       dirname(request.path),

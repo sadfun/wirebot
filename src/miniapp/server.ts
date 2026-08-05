@@ -11,7 +11,7 @@ import {
 import { CodexRpcError } from "../codex/rpc.js";
 import type { CodexRuntimeService } from "../codex/runtime-service.js";
 import { SkillBrowserError } from "../codex/skill-browser.js";
-import type { TelexSettingsStore } from "../core/settings-store.js";
+import type { WirebotSettingsStore } from "../core/settings-store.js";
 import { BridgeError } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
 import { validateTelegramInitData } from "./auth.js";
@@ -23,7 +23,7 @@ const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
 const settingsUpdateSchema = z.strictObject({
   expectedVersion: z.string().nullable(),
   values: z.record(z.string(), z.unknown()),
-  telex: z
+  wirebot: z
     .strictObject({
       remoteClientContext: z.boolean(),
     })
@@ -42,7 +42,7 @@ export interface MiniAppServerOptions {
   readonly allowedUserIds: ReadonlySet<number>;
   readonly configService: CodexConfigService;
   readonly runtime: MiniAppRuntimeController;
-  readonly settings: TelexSettingsStore;
+  readonly settings: WirebotSettingsStore;
   readonly logger: Logger;
   readonly assetDirectory?: string;
 }
@@ -147,20 +147,20 @@ export class MiniAppServer {
         const snapshot = await this.options.configService.read();
         this.sendJson(response, 200, {
           ...snapshot,
-          telex: this.options.settings.read(),
+          wirebot: this.options.settings.read(),
           runtime: this.options.runtime.status(),
         });
         return;
       }
       if (request.method === "PUT") {
-        const { expectedVersion, values, telex } = settingsUpdateSchema.parse(
+        const { expectedVersion, values, wirebot } = settingsUpdateSchema.parse(
           await this.readJson(request),
         );
         const writeOutcome =
           Object.keys(values).length === 0
             ? undefined
             : await this.options.configService.update({ expectedVersion, values });
-        if (telex !== undefined) await this.options.settings.update(telex);
+        if (wirebot !== undefined) await this.options.settings.update(wirebot);
         if (writeOutcome !== undefined) {
           try {
             await this.options.runtime.afterConfigWrite();
@@ -176,7 +176,7 @@ export class MiniAppServer {
         this.sendJson(response, 200, {
           ...snapshot,
           ...(writeOutcome === undefined ? {} : { writeOutcome }),
-          telex: this.options.settings.read(),
+          wirebot: this.options.settings.read(),
           runtime: this.options.runtime.status(),
         });
         return;

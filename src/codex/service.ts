@@ -592,7 +592,7 @@ export class CodexService {
 
     const threadId = await this.startThread(
       settings,
-      "telex",
+      "wirebot",
       ephemeral,
       conversationKey,
       connector,
@@ -614,7 +614,7 @@ export class CodexService {
         ...settings,
         cwd: this.#workspace,
         ephemeral,
-        serviceName: "telex",
+        serviceName: "wirebot",
         threadSource,
         dynamicTools: [...this.#dynamicTools.values()].map((tool) => tool.spec),
       },
@@ -842,7 +842,7 @@ export class CodexService {
   ): Promise<void> {
     const view = this.#sessions.get(params.threadId)?.view(params.turnId);
     if (view === undefined || params.namespace !== null) {
-      await this.replyDynamicTool(requestId, false, "This tool call has no active Telex turn.");
+      await this.replyDynamicTool(requestId, false, "This tool call has no active Wirebot turn.");
       return;
     }
     const tool = this.#dynamicTools.get(params.tool);
@@ -951,9 +951,9 @@ export function createTurnInput(
 export function createRemoteClientContext(connector: string): ApplicationContext {
   const connectorName = connectorDisplayName(connector);
   return {
-    "telex.remote-client": {
+    "wirebot.remote-client": {
       kind: "application",
-      value: `This Codex session is operated through Telex, a remote messaging bridge. The user reads and replies through ${connectorName} and is not present at the machine where Codex and its commands run.
+      value: `This Codex session is operated through Wirebot, a remote messaging bridge. The user reads and replies through ${connectorName} and is not present at the machine where Codex and its commands run.
 
 Host-local UI is not visible or accessible to the user:
 - Do not open browsers, GUI applications, editors, file managers, or OAuth pages as a way of handing work to the user.
@@ -961,9 +961,9 @@ Host-local UI is not visible or accessible to the user:
 - You may run and access local services yourself for development and testing. Only present a URL to the user when it is reachable from their device.
 - For authentication, prefer a device-code flow or a publicly reachable HTTPS flow and send the URL and code through chat. If only a local callback exists, explain the constraint and offer a remote-safe alternative such as a device flow, tunnel, or SSH port forwarding.
 - Do not assume the user can see the host screen, clipboard, notifications, or spawned windows.
-- Explicitly link files intended for the user in the final response so Telex can deliver them.
+- Explicitly link files intended for the user in the final response so Wirebot can deliver them.
 
-All normal Codex filesystem, shell, network, approval, and project behavior remains unchanged. Telex changes only how the user communicates with Codex.`,
+All normal Codex filesystem, shell, network, approval, and project behavior remains unchanged. Wirebot changes only how the user communicates with Codex.`,
     },
   };
 }

@@ -11,9 +11,9 @@ const envSchema = z.object({
     .url()
     .refine((value) => new URL(value).protocol === "https:", "PUBLIC_URL must use HTTPS")
     .optional(),
-  TELEX_TUNNEL: z.enum(["auto", "off"]).default("auto"),
-  TELEX_DATA_DIR: z.string().min(1).default(".telex"),
-  CODEX_WORKSPACE: z.string().min(1).default(".telex/workspace"),
+  WIREBOT_TUNNEL: z.enum(["auto", "off"]).default("auto"),
+  WIREBOT_DATA_DIR: z.string().min(1).default(".wirebot"),
+  CODEX_WORKSPACE: z.string().min(1).default(".wirebot/workspace"),
   HOST: z.string().min(1).default("127.0.0.1"),
   PORT: z.coerce.number().int().min(1).max(65_535).default(8787),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
@@ -47,8 +47,8 @@ export function loadAppConfig(environment: NodeJS.ProcessEnv = process.env): App
     telegramApiBase: parsed.TELEGRAM_API_BASE.replace(/\/$/, ""),
     telegramPollTimeout: parsed.TELEGRAM_POLL_TIMEOUT,
     publicUrl: parsed.PUBLIC_URL?.replace(/\/$/, ""),
-    tunnelMode: parsed.TELEX_TUNNEL,
-    dataDirectory: resolve(parsed.TELEX_DATA_DIR),
+    tunnelMode: parsed.WIREBOT_TUNNEL,
+    dataDirectory: resolve(parsed.WIREBOT_DATA_DIR),
     workspace: resolve(parsed.CODEX_WORKSPACE),
     host: parsed.HOST,
     port: parsed.PORT,

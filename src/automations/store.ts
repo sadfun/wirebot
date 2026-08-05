@@ -209,7 +209,7 @@ export class AutomationStore extends JsonStore<StoredState> {
           ...run,
           status: "interrupted",
           finishedAt: at,
-          error: "Telex restarted before the scheduled run completed.",
+          error: "Wirebot restarted before the scheduled run completed.",
         };
         draft.runs[id] = interrupted;
         recovered.push(interrupted);
@@ -354,7 +354,7 @@ function migrateStoredState(value: unknown): unknown {
     const { target: _target, ...rest } = entry;
     if (rest.status === "pending") {
       rest.status = "failed";
-      rest.error ??= "Telex restarted before notification delivery was confirmed.";
+      rest.error ??= "Wirebot restarted before notification delivery was confirmed.";
     }
     notifications[id] = rest;
   }

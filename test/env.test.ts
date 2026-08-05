@@ -15,8 +15,8 @@ describe("loadAppConfig", () => {
     expect(config.tunnelMode).toBe("auto");
   });
 
-  it("disables the quick tunnel with TELEX_TUNNEL=off", () => {
-    expect(loadAppConfig({ ...required, TELEX_TUNNEL: "off" }).tunnelMode).toBe("off");
+  it("disables the quick tunnel with WIREBOT_TUNNEL=off", () => {
+    expect(loadAppConfig({ ...required, WIREBOT_TUNNEL: "off" }).tunnelMode).toBe("off");
   });
 
   it("rejects malformed allowlist entries", () => {

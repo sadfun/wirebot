@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { MiniAppServer } from "../../dist/miniapp/server.js";
 
 const sourceAssetDirectory = join(process.cwd(), "dist/miniapp/public");
-const previewAssetDirectory = await mkdtemp(join(tmpdir(), "telex-miniapp-preview-"));
+const previewAssetDirectory = await mkdtemp(join(tmpdir(), "wirebot-miniapp-preview-"));
 const botToken = "preview-token";
 const userId = 42;
 const initData = signedInitData(botToken, userId);

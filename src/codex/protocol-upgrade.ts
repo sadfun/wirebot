@@ -67,7 +67,7 @@ export async function checkCodexProtocol(
 ): Promise<ProtocolCheckResult> {
   const projectRoot = resolve(options.projectRoot);
   const previousVersion = await readPinnedCodexVersion(projectRoot);
-  const toolchainsDirectory = join(projectRoot, ".telex", "toolchains");
+  const toolchainsDirectory = join(projectRoot, ".wirebot", "toolchains");
   const manager = new CodexToolchainManager(toolchainsDirectory, options.logger);
   const candidateVersion =
     options.requestedVersion === "latest"
@@ -77,7 +77,7 @@ export async function checkCodexProtocol(
 
   const stageRoot = join(
     projectRoot,
-    ".telex",
+    ".wirebot",
     "upgrade",
     `${candidateVersion}-${crypto.randomUUID()}`,
   );

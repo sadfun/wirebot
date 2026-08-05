@@ -75,13 +75,13 @@ describe("routeTelegramMessage", () => {
 
 describe("matchTelegramCommand", () => {
   it("extracts a targeted command and its arguments from the raw entity", () => {
-    const text = "/start@Telex_Bot setup-token";
+    const text = "/start@Wirebot_Bot setup-token";
     const match = matchTelegramCommand(
       message({
         text,
-        entities: [{ type: "bot_command", offset: 0, length: "/start@Telex_Bot".length }],
+        entities: [{ type: "bot_command", offset: 0, length: "/start@Wirebot_Bot".length }],
       }),
-      "telex_bot",
+      "wirebot_bot",
     );
 
     expect(match).toEqual({
@@ -98,19 +98,19 @@ describe("matchTelegramCommand", () => {
           text,
           entities: [{ type: "bot_command", offset: 0, length: text.length }],
         }),
-        "telex_bot",
+        "wirebot_bot",
       ),
     ).toEqual({ kind: "otherBot" });
   });
 
   it("does not interpret a media caption as a command", () => {
-    expect(matchTelegramCommand(message({ caption: "/start" }), "telex_bot")).toEqual({
+    expect(matchTelegramCommand(message({ caption: "/start" }), "wirebot_bot")).toEqual({
       kind: "none",
     });
   });
 
   it("supports entity-free Bot API-compatible command fixtures", () => {
-    expect(matchTelegramCommand(message({ text: "/start payload" }), "telex_bot")).toEqual({
+    expect(matchTelegramCommand(message({ text: "/start payload" }), "wirebot_bot")).toEqual({
       kind: "command",
       command: { name: "start", args: "payload" },
     });

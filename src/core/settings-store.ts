@@ -10,24 +10,24 @@ const storedSettingsSchema = settingsSchema.extend({
   version: z.literal(1),
 });
 
-export type TelexSettings = z.infer<typeof settingsSchema>;
+export type WirebotSettings = z.infer<typeof settingsSchema>;
 
-export class TelexSettingsStore extends JsonStore<z.infer<typeof storedSettingsSchema>> {
+export class WirebotSettingsStore extends JsonStore<z.infer<typeof storedSettingsSchema>> {
   public constructor(path: string, logger: Logger) {
     super(
       path,
       storedSettingsSchema,
       { version: 1, remoteClientContext: true },
       logger,
-      "Ignoring invalid Telex settings",
+      "Ignoring invalid Wirebot settings",
     );
   }
 
-  public read(): TelexSettings {
+  public read(): WirebotSettings {
     return { remoteClientContext: this.state.remoteClientContext };
   }
 
-  public async update(input: unknown): Promise<TelexSettings> {
+  public async update(input: unknown): Promise<WirebotSettings> {
     const settings = settingsSchema.parse(input);
     await this.persist({ version: 1, ...settings });
     return settings;

@@ -136,7 +136,7 @@ describe("CodexService outbound files", () => {
     expect(rpc.turnStartRequest).toMatchObject({
       params: {
         additionalContext: {
-          "telex.remote-client": {
+          "wirebot.remote-client": {
             kind: "application",
             value: expect.stringContaining("reads and replies through Telegram"),
           },
@@ -258,7 +258,7 @@ function completedTurn(): Turn {
 }
 
 async function temporaryDirectory(): Promise<string> {
-  const path = await mkdtemp(join(tmpdir(), "telex-service-output-"));
+  const path = await mkdtemp(join(tmpdir(), "wirebot-service-output-"));
   temporaryDirectories.push(path);
   return path;
 }

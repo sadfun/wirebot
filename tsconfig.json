@@ -28,5 +28,5 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["dist", "node_modules", ".telex"]
+  "exclude": ["dist", "node_modules", ".wirebot"]
 }

@@ -12,7 +12,7 @@ import { CodexToolchainManager, readPinnedCodexVersion } from "./codex/toolchain
 import { loadAppConfig } from "./config/env.js";
 import { CodexBridge } from "./core/bridge.js";
 import { ConversationStore } from "./core/conversation-store.js";
-import { TelexSettingsStore } from "./core/settings-store.js";
+import { WirebotSettingsStore } from "./core/settings-store.js";
 import { ensureCloudflared } from "./miniapp/cloudflared.js";
 import { MiniAppServer } from "./miniapp/server.js";
 import { QuickTunnel } from "./miniapp/tunnel.js";
@@ -20,11 +20,11 @@ import { deferred } from "./shared/async.js";
 import { errorMessage } from "./shared/errors.js";
 import { atomicWriteFile, ensureDirectory } from "./shared/fs.js";
 import { Logger } from "./shared/logger.js";
-import { readTelexVersion } from "./shared/version.js";
+import { readWirebotVersion } from "./shared/version.js";
 import { ChatGptVoiceTranscriber } from "./transcription/service.js";
 import { CurlImpersonateTransport } from "./transcription/transport.js";
 
-const defaultConfig = `# Managed by Telex. You can edit this file or use the Telegram Mini App.
+const defaultConfig = `# Managed by Wirebot. You can edit this file or use the Telegram Mini App.
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 web_search = "live"
@@ -36,12 +36,12 @@ interface Stoppable {
   stop(): Promise<void>;
 }
 
-export async function runTelex(): Promise<void> {
+export async function runWirebot(): Promise<void> {
   const config = loadAppConfig();
-  const logger = new Logger(config.logLevel, { service: "telex" });
+  const logger = new Logger(config.logLevel, { service: "wirebot" });
   const shutdown = shutdownSignal(logger);
   const projectRoot = fileURLToPath(new URL("../", import.meta.url));
-  const bridgeVersion = await readTelexVersion(projectRoot);
+  const bridgeVersion = await readWirebotVersion(projectRoot);
   const codexHome = join(config.dataDirectory, "codex-home");
   const outboundDirectory = join(config.dataDirectory, "outbound");
   const toolchainsDirectory = join(config.dataDirectory, "toolchains");
@@ -80,7 +80,7 @@ export async function runTelex(): Promise<void> {
       statePath,
       logger.child({ component: "conversation-store" }),
     );
-    const settings = new TelexSettingsStore(
+    const settings = new WirebotSettingsStore(
       settingsPath,
       logger.child({ component: "settings-store" }),
     );
@@ -163,7 +163,7 @@ export async function runTelex(): Promise<void> {
         });
       } catch (error) {
         logger.warn(
-          "No PUBLIC_URL and no quick tunnel; the settings Mini App is disabled. Set PUBLIC_URL, or set TELEX_TUNNEL=auto with network access to GitHub releases.",
+          "No PUBLIC_URL and no quick tunnel; the settings Mini App is disabled. Set PUBLIC_URL, or set WIREBOT_TUNNEL=auto with network access to GitHub releases.",
           { error: errorMessage(error) },
         );
       }
@@ -174,7 +174,7 @@ export async function runTelex(): Promise<void> {
       config.telegramApiBase,
       config.allowedUserIds,
       config.telegramPollTimeout,
-      join(config.workspace, ".telex", "attachments"),
+      join(config.workspace, ".wirebot", "attachments"),
       logger.child({ component: "telegram" }),
       publicUrl === undefined ? undefined : `${publicUrl}/miniapp`,
     );
@@ -197,7 +197,7 @@ export async function runTelex(): Promise<void> {
     resources.push(scheduledRuns);
     await scheduledRuns.start();
 
-    logger.info("Telex is ready", {
+    logger.info("Wirebot is ready", {
       version: bridgeVersion,
       codexVersion: pinnedVersion,
       workspace: config.workspace,
@@ -206,7 +206,7 @@ export async function runTelex(): Promise<void> {
 
     await shutdown.promise;
   } catch (error) {
-    logger.error("Telex failed", error);
+    logger.error("Wirebot failed", error);
     throw error;
   } finally {
     shutdown.dispose();

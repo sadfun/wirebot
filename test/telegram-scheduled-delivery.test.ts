@@ -16,10 +16,10 @@ import { Logger } from "../src/shared/logger.js";
 
 describe("Telegram scheduled delivery", () => {
   it("pins the settings Mini App to the bot menu", () => {
-    expect(telegramMenuButton("https://telex.example/miniapp")).toEqual({
+    expect(telegramMenuButton("https://wirebot.example/miniapp")).toEqual({
       type: "web_app",
       text: "Settings",
-      web_app: { url: "https://telex.example/miniapp" },
+      web_app: { url: "https://wirebot.example/miniapp" },
     });
   });
 
@@ -28,7 +28,7 @@ describe("Telegram scheduled delivery", () => {
   });
 
   it("overwrites chat-specific menu buttons that would mask the Mini App default", async () => {
-    const expected = telegramMenuButton("https://telex.example/miniapp");
+    const expected = telegramMenuButton("https://wirebot.example/miniapp");
     const setChatMenuButton = vi.fn(
       async (_parameters: {
         chat_id?: number;
@@ -43,7 +43,7 @@ describe("Telegram scheduled delivery", () => {
         "getChatMenuButton" | "setChatMenuButton"
       >,
       new Set([42, 7]),
-      "https://telex.example/miniapp",
+      "https://wirebot.example/miniapp",
       new Logger("error"),
     );
 
@@ -60,7 +60,7 @@ describe("Telegram scheduled delivery", () => {
   });
 
   it("continues reconciling other menu-button scopes after a Telegram API failure", async () => {
-    const expected = telegramMenuButton("https://telex.example/miniapp");
+    const expected = telegramMenuButton("https://wirebot.example/miniapp");
     const setChatMenuButton = vi.fn(async (parameters: { chat_id?: number }) => {
       if (parameters.chat_id === 7) throw new Error("chat not found");
       return true as const;
@@ -73,7 +73,7 @@ describe("Telegram scheduled delivery", () => {
         "getChatMenuButton" | "setChatMenuButton"
       >,
       new Set([7, 42]),
-      "https://telex.example/miniapp",
+      "https://wirebot.example/miniapp",
       new Logger("error"),
     );
 
@@ -178,7 +178,7 @@ describe("Telegram scheduled delivery", () => {
       "https://api.telegram.org",
       new Set([7]),
       30,
-      "/tmp/telex-test-attachments",
+      "/tmp/wirebot-test-attachments",
       new Logger("error"),
     );
 

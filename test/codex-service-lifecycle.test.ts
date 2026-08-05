@@ -114,7 +114,7 @@ describe("CodexService lifecycle", () => {
     rpc.interruptActiveTurnId = "80432e00-b82b-4cbd-9de3-f4d846ace12c";
 
     // The interrupt for turn-1 is rejected because Codex already swapped in a
-    // successor. Telex does not parse the error; the authoritative turn will
+    // successor. Wirebot does not parse the error; the authoritative turn will
     // announce itself and the standing stop intent interrupts it then.
     await expect(service.interrupt("telegram:interrupt-mismatch")).resolves.toBe(true);
     expect(rpc.requests.filter((request) => request.method === "turn/interrupt")).toEqual([
@@ -558,7 +558,7 @@ function completedTurn(
 async function testService(
   providers: ConstructorParameters<typeof CodexService>[8] = {},
 ): Promise<Readonly<{ rpc: ControlledRpc; service: CodexService }>> {
-  const directory = await mkdtemp(join(tmpdir(), "telex-codex-lifecycle-"));
+  const directory = await mkdtemp(join(tmpdir(), "wirebot-codex-lifecycle-"));
   temporaryDirectories.push(directory);
   const workspace = join(directory, "workspace");
   const generatedImages = join(directory, "generated-images");

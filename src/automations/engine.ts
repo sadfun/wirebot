@@ -83,7 +83,7 @@ const scheduledResultJsonSchema = toolJsonSchema(scheduledResultSchema);
 const automationUpdateSpec = {
   type: "function",
   name: "automation_update",
-  description: `Manage Telex scheduled runs. Use this whenever the user asks to schedule, repeat, monitor, remind, follow up later, list schedules, pause, resume, change, or delete a scheduled task. Use kind "heartbeat" to revisit this same Codex thread; use "cron" for a fresh persistent thread on every run. Telex accepts a bounded RFC 5545 RRULE subset: MINUTELY with INTERVAL; HOURLY with optional BYMINUTE; DAILY or WEEKLY with optional BYMINUTE, BYHOUR, and BYDAY; plus UNTIL, and WKST for WEEKLY. Use one line, no DTSTART, and keep BY lists small. Do not invent owners, destinations, or thread IDs: Telex binds them to the current conversation.`,
+  description: `Manage Wirebot scheduled runs. Use this whenever the user asks to schedule, repeat, monitor, remind, follow up later, list schedules, pause, resume, change, or delete a scheduled task. Use kind "heartbeat" to revisit this same Codex thread; use "cron" for a fresh persistent thread on every run. Wirebot accepts a bounded RFC 5545 RRULE subset: MINUTELY with INTERVAL; HOURLY with optional BYMINUTE; DAILY or WEEKLY with optional BYMINUTE, BYHOUR, and BYDAY; plus UNTIL, and WKST for WEEKLY. Use one line, no DTSTART, and keep BY lists small. Do not invent owners, destinations, or thread IDs: Wirebot binds them to the current conversation.`,
   inputSchema: toolJsonSchema(automationOperationSchema),
 } as const satisfies CodexDynamicTool["spec"];
 
@@ -225,9 +225,9 @@ export class ScheduledRunsEngine {
       return undefined;
     }
     return {
-      "telex.scheduled-result": {
+      "wirebot.scheduled-result": {
         kind: "application",
-        value: `The user is replying to a Telex scheduled-run notification. The quoted provider message may be truncated; this is the complete stored result. Do not imply that another Codex thread is the current thread.\n\nAutomation: ${automation.name}\nRun ID: ${notification.runId}\nSource thread: ${notification.sourceThreadId ?? "unavailable"}\nTitle: ${notification.title ?? automation.name}\nResult:\n${notification.body ?? "(no result text)"}`,
+        value: `The user is replying to a Wirebot scheduled-run notification. The quoted provider message may be truncated; this is the complete stored result. Do not imply that another Codex thread is the current thread.\n\nAutomation: ${automation.name}\nRun ID: ${notification.runId}\nSource thread: ${notification.sourceThreadId ?? "unavailable"}\nTitle: ${notification.title ?? automation.name}\nResult:\n${notification.body ?? "(no result text)"}`,
       },
     };
   }
@@ -386,7 +386,7 @@ export class ScheduledRunsEngine {
       completion = {
         status: this.#stopping ? "interrupted" : "failed",
         error: this.#stopping
-          ? "Telex stopped before the scheduled run completed."
+          ? "Wirebot stopped before the scheduled run completed."
           : errorMessage(error),
       };
       if (!this.#stopping) {
@@ -733,7 +733,7 @@ export class ScheduledRunsEngine {
   }
 
   private async ensureMemoryFile(automationId: string): Promise<string> {
-    const directory = join(this.#workspace, ".telex", "automations", automationId);
+    const directory = join(this.#workspace, ".wirebot", "automations", automationId);
     const path = join(directory, "memory.md");
     await mkdir(directory, { recursive: true });
     try {
@@ -841,7 +841,7 @@ Read the memory file before doing the work. Update it with concise durable conte
 }
 
 function scheduledDeveloperInstructions(memoryPath: string): string {
-  return `You are running an unattended Telex scheduled task, following the Codex Desktop automation model. Read ${memoryPath} before each run and update it with concise durable context before finishing. Do not ask the user questions or wait for interactive approval. Your final response must follow the supplied output schema.`;
+  return `You are running an unattended Wirebot scheduled task, following the Codex Desktop automation model. Read ${memoryPath} before each run and update it with concise durable context before finishing. Do not ask the user questions or wait for interactive approval. Your final response must follow the supplied output schema.`;
 }
 
 function notificationText(title: string, message: string): string {

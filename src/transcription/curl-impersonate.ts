@@ -68,7 +68,7 @@ export async function ensureCurlImpersonate(
 
   const versionDirectory = join(toolchainsDirectory, `curl-impersonate-${curlImpersonateVersion}`);
   const binaryPath = join(versionDirectory, "curl-impersonate");
-  const markerPath = join(versionDirectory, ".telex-install.json");
+  const markerPath = join(versionDirectory, ".wirebot-install.json");
   if (await installIsReady(markerPath, binaryPath)) return binaryPath;
 
   await ensureDirectory(versionDirectory);

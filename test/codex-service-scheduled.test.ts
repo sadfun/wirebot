@@ -351,7 +351,7 @@ function completedTurn(id: string, items: readonly ThreadItem[], status: Turn["s
 }
 
 async function fixture() {
-  const directory = await mkdtemp(join(tmpdir(), "telex-codex-scheduled-"));
+  const directory = await mkdtemp(join(tmpdir(), "wirebot-codex-scheduled-"));
   directories.push(directory);
   const workspace = join(directory, "workspace");
   const generated = join(directory, "generated");

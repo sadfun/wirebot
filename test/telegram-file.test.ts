@@ -102,7 +102,7 @@ function apiReturning(file: Awaited<ReturnType<Api["getFile"]>>): Api {
 }
 
 async function temporaryDirectory(): Promise<string> {
-  const path = await mkdtemp(join(tmpdir(), "telex-telegram-test-"));
+  const path = await mkdtemp(join(tmpdir(), "wirebot-telegram-test-"));
   temporaryDirectories.push(path);
   return path;
 }

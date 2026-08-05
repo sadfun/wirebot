@@ -58,7 +58,10 @@ describe("ScheduledRunsEngine", () => {
     const automationId = automations[0]?.id;
     if (automationId === undefined) throw new Error("Expected an automation");
     await expect(
-      readFile(join(fixture.workspace, ".telex", "automations", automationId, "memory.md"), "utf8"),
+      readFile(
+        join(fixture.workspace, ".wirebot", "automations", automationId, "memory.md"),
+        "utf8",
+      ),
     ).resolves.toContain("# Automation memory");
     const otherConversation = { ...context, conversationKey: "telegram:99:0" };
     await expect(
@@ -124,7 +127,7 @@ describe("ScheduledRunsEngine", () => {
       ownerReference,
       conversationReference,
     );
-    expect(context?.["telex.scheduled-result"]?.value).toContain("The migration step failed.");
+    expect(context?.["wirebot.scheduled-result"]?.value).toContain("The migration step failed.");
     const runId = fixture.store.listRuns()[0]?.id;
     expect(runId).toBeDefined();
     const continued = await fixture.engine.continueRun(
@@ -294,7 +297,7 @@ describe("ScheduledRunsEngine", () => {
     expect(fixture.store.getRun("old-run")).toMatchObject({
       status: "interrupted",
       finishedAt: "2026-07-21T10:05:00.000Z",
-      error: "Telex restarted before the scheduled run completed.",
+      error: "Wirebot restarted before the scheduled run completed.",
     });
     expect(fixture.codex.scheduledRequests).toHaveLength(0);
     expect(fixture.store.getAutomation("automation-1")?.nextRunAt).toBe("2026-07-21T11:00:00Z");
@@ -349,7 +352,7 @@ describe("ScheduledRunsEngine", () => {
 
     expect(fixture.store.getRun("interrupted-run")).toMatchObject({
       status: "interrupted",
-      error: "Telex stopped before the scheduled run completed.",
+      error: "Wirebot stopped before the scheduled run completed.",
     });
     expect(fixture.channel.publish).not.toHaveBeenCalled();
   });
@@ -426,7 +429,7 @@ interface FixtureOptions {
 }
 
 async function createFixture(options: FixtureOptions = {}) {
-  const directory = await mkdtemp(join(tmpdir(), "telex-automation-engine-"));
+  const directory = await mkdtemp(join(tmpdir(), "wirebot-automation-engine-"));
   directories.push(directory);
   const workspace = join(directory, "workspace");
   await mkdir(workspace);

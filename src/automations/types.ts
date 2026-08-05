@@ -54,7 +54,7 @@ function daysInMonth(year: number, month: number): number {
 }
 
 /**
- * An opaque provider-owned address. Telex core never parses `id`; an adapter may
+ * An opaque provider-owned address. Wirebot core never parses `id`; an adapter may
  * use formats such as `chat:123:topic:7` or `channel:C123:thread:456`.
  */
 const providerReferenceSchema: z.ZodType<ProviderReference> = z.strictObject({

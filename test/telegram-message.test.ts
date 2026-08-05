@@ -110,18 +110,21 @@ describe("normalizeTelegramMessage", () => {
   });
 
   it("includes guest reference messages and their attachments", () => {
-    const result = normalizeTelegramMessage(message({ text: "@telex_bot What does this mean?" }), [
-      message({
-        message_id: 41,
-        from: { id: 2, is_bot: false, first_name: "Grace" },
-        caption: "Original diagram",
-        photo: [largePhoto],
-      }),
-    ]);
+    const result = normalizeTelegramMessage(
+      message({ text: "@wirebot_bot What does this mean?" }),
+      [
+        message({
+          message_id: 41,
+          from: { id: 2, is_bot: false, first_name: "Grace" },
+          caption: "Original diagram",
+          photo: [largePhoto],
+        }),
+      ],
+    );
 
     expect(result.text).toContain("Referenced message from Grace:");
     expect(result.text).toContain("Original diagram");
-    expect(result.text).toContain("@telex_bot What does this mean?");
+    expect(result.text).toContain("@wirebot_bot What does this mean?");
     expect(result.files).toHaveLength(1);
     expect(result.files[0]?.description).toContain("Referenced Telegram photo");
   });

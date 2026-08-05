@@ -12,7 +12,7 @@ import type {
   CodexUsageLimits,
 } from "../src/codex/runtime-service.js";
 import type { SkillResource } from "../src/codex/skill-browser.js";
-import type { TelexSettings, TelexSettingsStore } from "../src/core/settings-store.js";
+import type { WirebotSettings, WirebotSettingsStore } from "../src/core/settings-store.js";
 import type { ConfigWriteResponse } from "../src/generated/codex/v2/ConfigWriteResponse.js";
 import type { MiniAppRuntimeController } from "../src/miniapp/server.js";
 import { MiniAppServer } from "../src/miniapp/server.js";
@@ -74,7 +74,7 @@ describe("MiniAppServer config API", () => {
     expect(responseJson(response)).toEqual({
       ...snapshot,
       writeOutcome,
-      telex: { remoteClientContext: true },
+      wirebot: { remoteClientContext: true },
       runtime: readyStatus,
     });
     expect(update).toHaveBeenCalledWith({
@@ -85,7 +85,7 @@ describe("MiniAppServer config API", () => {
     expect(runtime.afterConfigWrite).toHaveBeenCalledOnce();
   });
 
-  it("updates Telex settings without rewriting Codex config", async () => {
+  it("updates Wirebot settings without rewriting Codex config", async () => {
     const snapshot = {
       version: "revision-1",
       values: { model: "gpt-test" },
@@ -108,14 +108,14 @@ describe("MiniAppServer config API", () => {
       request("PUT", "/api/config", {
         expectedVersion: "revision-1",
         values: {},
-        telex: { remoteClientContext: false },
+        wirebot: { remoteClientContext: false },
       }),
     );
 
     expect(response.status).toBe(200);
     expect(responseJson(response)).toEqual({
       ...snapshot,
-      telex: { remoteClientContext: false },
+      wirebot: { remoteClientContext: false },
       runtime: readyStatus,
     });
     expect(update).not.toHaveBeenCalled();
@@ -225,7 +225,7 @@ describe("MiniAppServer config API", () => {
   });
 
   it("serves the compiled Mini App stylesheet", async () => {
-    const assetDirectory = await mkdtemp(join(tmpdir(), "telex-miniapp-assets-"));
+    const assetDirectory = await mkdtemp(join(tmpdir(), "wirebot-miniapp-assets-"));
     try {
       await Promise.all([
         writeFile(join(assetDirectory, "index.html"), "<!doctype html>"),
@@ -351,7 +351,7 @@ function testServer(
     allowedUserIds: new Set([42]),
     configService: configService as unknown as CodexConfigService,
     runtime,
-    settings: settings as unknown as TelexSettingsStore,
+    settings: settings as unknown as WirebotSettingsStore,
     logger,
     ...(assetDirectory === undefined ? {} : { assetDirectory }),
   });
@@ -408,16 +408,16 @@ function testRuntime(): TestRuntimeController {
 }
 
 interface TestSettingsStore {
-  readonly read: () => TelexSettings;
-  readonly update: ReturnType<typeof vi.fn<(input: unknown) => Promise<TelexSettings>>>;
+  readonly read: () => WirebotSettings;
+  readonly update: ReturnType<typeof vi.fn<(input: unknown) => Promise<WirebotSettings>>>;
 }
 
 function testSettingsStore(): TestSettingsStore {
-  let settings: TelexSettings = { remoteClientContext: true };
+  let settings: WirebotSettings = { remoteClientContext: true };
   return {
     read: () => settings,
     update: vi.fn(async (input: unknown) => {
-      settings = input as TelexSettings;
+      settings = input as WirebotSettings;
       return settings;
     }),
   };

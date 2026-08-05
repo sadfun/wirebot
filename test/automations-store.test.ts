@@ -208,12 +208,12 @@ describe("AutomationStore", () => {
     expect(store.getRun("run-2")).toBeUndefined();
     expect(store.listNotifications()[0]).toMatchObject({
       status: "failed",
-      error: "Telex restarted before notification delivery was confirmed.",
+      error: "Wirebot restarted before notification delivery was confirmed.",
     });
   });
 
   it("fails closed instead of forgetting schedules when persisted state is invalid", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "telex-automations-invalid-"));
+    const directory = await mkdtemp(join(tmpdir(), "wirebot-automations-invalid-"));
     directories.push(directory);
     const path = join(directory, "automations.json");
     await writeFile(path, "{not valid json\n", "utf8");
@@ -225,7 +225,7 @@ describe("AutomationStore", () => {
 });
 
 async function createStore(): Promise<{ path: string; store: AutomationStore }> {
-  const directory = await mkdtemp(join(tmpdir(), "telex-automations-"));
+  const directory = await mkdtemp(join(tmpdir(), "wirebot-automations-"));
   directories.push(directory);
   const path = join(directory, "automations.json");
   const store = new AutomationStore(path, new Logger("error"));

@@ -13,7 +13,7 @@ afterEach(async () => {
 
 describe("ConversationStore", () => {
   it("persists durable Codex thread mappings atomically", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "telex-store-"));
+    const directory = await mkdtemp(join(tmpdir(), "wirebot-store-"));
     directories.push(directory);
     const path = join(directory, "state", "conversations.json");
     const logger = new Logger("error");
@@ -29,7 +29,7 @@ describe("ConversationStore", () => {
   });
 
   it("keeps explicit thread-switch history", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "telex-store-"));
+    const directory = await mkdtemp(join(tmpdir(), "wirebot-store-"));
     directories.push(directory);
     const path = join(directory, "conversations.json");
     const store = new ConversationStore(path, new Logger("error"));

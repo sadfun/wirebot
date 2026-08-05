@@ -29,7 +29,7 @@ import type {
   CodexUsageLimitWindow,
 } from "../codex/runtime-service.js";
 import type { SkillDirectory, SkillFile, SkillResource } from "../codex/skill-browser.js";
-import type { TelexSettings } from "../core/settings-store.js";
+import type { WirebotSettings } from "../core/settings-store.js";
 import type { ConfigWriteResponse } from "../generated/codex/v2/ConfigWriteResponse.js";
 import {
   AppRoot,
@@ -73,7 +73,7 @@ type ConfigRequirements = NonNullable<ConfigCapabilities["requirements"]>;
 
 /** The `/api/config` wire shape; the client trusts the server's typed JSON as-is. */
 type LoadedSnapshot = EditableConfigSnapshot & {
-  readonly telex: TelexSettings;
+  readonly wirebot: WirebotSettings;
   readonly runtime: CodexRuntimeStatus;
   readonly writeOutcome?: ConfigWriteResponse | undefined;
 };
@@ -261,7 +261,7 @@ function SettingsApp(): ReactElement {
     if (loaded === undefined) return;
     setSnapshot(loaded);
     setDraft(draftFromConfig(loaded.values));
-    setRemoteClientContext(loaded.telex.remoteClientContext);
+    setRemoteClientContext(loaded.wirebot.remoteClientContext);
     setValidation(loaded.validation);
     setNotice("Settings are up to date.");
   }, [snapshotLoad.value]);
@@ -349,7 +349,7 @@ function SettingsApp(): ReactElement {
   );
   const configDirty = Object.keys(changes).length > 0;
   const remoteClientContextDirty =
-    snapshot !== undefined && remoteClientContext !== snapshot.telex.remoteClientContext;
+    snapshot !== undefined && remoteClientContext !== snapshot.wirebot.remoteClientContext;
   const dirty = configDirty || remoteClientContextDirty;
 
   useEffect(() => {
@@ -440,12 +440,12 @@ function SettingsApp(): ReactElement {
       const body = {
         expectedVersion: snapshot.version,
         values: changes,
-        ...(remoteClientContextDirty ? { telex: { remoteClientContext } } : {}),
+        ...(remoteClientContextDirty ? { wirebot: { remoteClientContext } } : {}),
       };
       const loaded = await requestSnapshot("PUT", body);
       setSnapshot(loaded);
       setDraft(draftFromConfig(loaded.values));
-      setRemoteClientContext(loaded.telex.remoteClientContext);
+      setRemoteClientContext(loaded.wirebot.remoteClientContext);
       setValidation(loaded.validation);
       const overridden = loaded.writeOutcome?.status === "okOverridden";
       setNotice(
@@ -996,20 +996,20 @@ function renderForm(options: FormRenderOptions): ReactElement {
     </Section>
   );
 
-  const telexSection = (
+  const wirebotSection = (
     <Section
       header="Remote connection"
-      footer="Enabled by default; Telex detects the current connector for each turn."
+      footer="Enabled by default; Wirebot detects the current connector for each turn."
     >
       {toggleField({
-        draftKey: "telex.remoteClientContext",
+        draftKey: "wirebot.remoteClientContext",
         label: "Remote session context",
         description:
           "Tell Codex that you are connected remotely, so it avoids host-local UI and localhost handoffs.",
         checked: options.remoteClientContext,
         disabled: false,
         issues: [],
-        fieldId: "telex-remote-client-context",
+        fieldId: "wirebot-remote-client-context",
         onChange: options.updateRemoteClientContext,
       })}
     </Section>
@@ -1267,7 +1267,7 @@ function renderForm(options: FormRenderOptions): ReactElement {
       <main className={`page ${showSaveDock ? "pageWithSaveDock" : ""}`}>
         <header className="pageHeader">
           <div>
-            <Headline Component="h1">Telex settings</Headline>
+            <Headline Component="h1">Wirebot settings</Headline>
             <Caption className="pageSubtitle">Bridge behavior and Codex configuration</Caption>
           </div>
           <Caption className="revision">
@@ -1281,7 +1281,7 @@ function renderForm(options: FormRenderOptions): ReactElement {
         <div className="sectionStack">
           {usageSection}
           {runtimeSection}
-          {telexSection}
+          {wirebotSection}
           {modelSection}
           {accessSection}
           {environmentSection}
@@ -1924,7 +1924,7 @@ async function requestSnapshot(
   body?: Readonly<{
     expectedVersion: string | null;
     values: Partial<EditableCodexConfig>;
-    telex?: TelexSettings;
+    wirebot?: WirebotSettings;
   }>,
 ): Promise<LoadedSnapshot> {
   const value = await requestJson("/api/config", {

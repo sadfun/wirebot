@@ -102,7 +102,7 @@ export async function ensureCloudflared(
 
   const versionDirectory = join(toolchainsDirectory, `cloudflared-${cloudflaredVersion}`);
   const binaryPath = join(versionDirectory, "cloudflared");
-  const markerPath = join(versionDirectory, ".telex-install.json");
+  const markerPath = join(versionDirectory, ".wirebot-install.json");
   if (await installIsReady(markerPath, binaryPath)) return binaryPath;
 
   await ensureDirectory(versionDirectory);

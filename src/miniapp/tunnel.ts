@@ -95,7 +95,7 @@ export class QuickTunnel {
       child.once("exit", (code, signal) => {
         if (this.#stopping) return;
         this.#options.logger.warn(
-          "The quick tunnel exited; the Mini App URL is unreachable until Telex restarts",
+          "The quick tunnel exited; the Mini App URL is unreachable until Wirebot restarts",
           { code, signal },
         );
       });

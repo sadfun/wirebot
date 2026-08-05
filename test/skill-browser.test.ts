@@ -6,7 +6,7 @@ import { readSkillResource, SkillBrowserError } from "../src/codex/skill-browser
 
 describe("skill browser", () => {
   it("lists bundled files and reads text and image resources", async () => {
-    const root = await mkdtemp(join(tmpdir(), "telex-skill-browser-"));
+    const root = await mkdtemp(join(tmpdir(), "wirebot-skill-browser-"));
     await mkdir(join(root, "references"));
     await writeFile(join(root, "SKILL.md"), "# Example\n");
     await writeFile(join(root, "references", "guide.md"), "Use carefully.\n");
@@ -39,8 +39,8 @@ describe("skill browser", () => {
   });
 
   it("rejects traversal and symlinks that leave the skill directory", async () => {
-    const root = await mkdtemp(join(tmpdir(), "telex-skill-browser-"));
-    const outside = await mkdtemp(join(tmpdir(), "telex-skill-outside-"));
+    const root = await mkdtemp(join(tmpdir(), "wirebot-skill-browser-"));
+    const outside = await mkdtemp(join(tmpdir(), "wirebot-skill-outside-"));
     await writeFile(join(root, "SKILL.md"), "# Example\n");
     await writeFile(join(outside, "secret.txt"), "not part of the skill");
     await symlink(join(outside, "secret.txt"), join(root, "outside.txt"));
@@ -57,7 +57,7 @@ describe("skill browser", () => {
   });
 
   it("limits large file previews", async () => {
-    const root = await mkdtemp(join(tmpdir(), "telex-skill-browser-"));
+    const root = await mkdtemp(join(tmpdir(), "wirebot-skill-browser-"));
     await writeFile(join(root, "SKILL.md"), "# Example\n");
     await writeFile(join(root, "large.bin"), Buffer.alloc(2 * 1_024 * 1_024 + 1));
 

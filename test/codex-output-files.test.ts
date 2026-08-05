@@ -256,7 +256,7 @@ async function resolveFiles(
 }
 
 async function temporaryDirectory(): Promise<string> {
-  const path = await mkdtemp(join(tmpdir(), "telex-output-"));
+  const path = await mkdtemp(join(tmpdir(), "wirebot-output-"));
   temporaryDirectories.push(path);
   return path;
 }
