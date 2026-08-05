@@ -101,6 +101,7 @@ Voice messages use that same ChatGPT subscription. Wirebot briefly shows a **Tra
 | `/new` | Interrupt the current turn, forget its thread, and start fresh on the next message. |
 | `/back` | Return to the previously active Codex task. |
 | `/stop` | Interrupt the running Codex turn. |
+| `/compact` | Ask Codex to summarize earlier context in the current task; unavailable while a turn is running. |
 | `/schedules` | List your scheduled runs and their next execution times. |
 | `/status` | Check app-server connectivity and the current Codex account. |
 | `/login` | Start Codex's ChatGPT device-code login in a private chat. |
@@ -110,7 +111,7 @@ Voice messages use that same ChatGPT subscription. Wirebot briefly shows a **Tra
 | `/restart` | Drain active work and safely restart only the Codex app-server. |
 | `/help` | Show the command list. |
 
-Messages that are not commands become `turn/start` requests. Telegram voice messages are transcribed before the turn starts, while their original OGG files remain available to Codex. Photos and supported image files use Codex's native image input. Videos, other audio, documents, animated stickers, and other binary files are downloaded under `.wirebot/attachments` in the Codex workspace and passed as local paths; captions, replies, forwards, polls, contacts, locations, checklists, and Telegram-only structures are preserved as concise text context. Codex commentary drives Telegram's thinking indicator, final-answer deltas drive the draft, and approval or user-input requests become inline choices.
+Messages that are not commands become `turn/start` requests. Telegram voice messages are transcribed before the turn starts, while their original OGG files remain available to Codex. Photos and supported image files use Codex's native image input. Videos, other audio, documents, animated stickers, and other binary files are downloaded under `.wirebot/attachments` in the Codex workspace and passed as local paths; captions, replies, forwards, polls, contacts, locations, checklists, and Telegram-only structures are preserved as concise text context. Codex commentary drives Telegram's thinking indicator, final-answer deltas drive the draft, approval or user-input requests become inline choices, and native automatic or manual context compaction is shown in the same progress stream.
 
 Every turn also carries connector-derived application context separately from the user's message: it tells Codex that the user is remote (so host-local browser windows and `localhost` links are not user-accessible) and, in the container, describes the persistence contract above.
 
@@ -121,6 +122,8 @@ Telegram's hosted Bot API only allows bots to download files up to 20 MB and upl
 ## Scheduled runs
 
 Ask Codex naturally, for example, “Every weekday at 9, check this project for failed CI runs” or “Revisit this task every hour and notify me only if something changed.” Wirebot exposes a host-managed `automation_update` tool to new Codex tasks and stores each schedule with an explicit time zone. A task created before upgrading does not have that tool in its persisted definition; send `/new` once before asking it to create or edit schedules. `/schedules` remains available for viewing them.
+
+The Mini App's **Schedules** tab lists every schedule owned by the authenticated user, including schedules created in other topics. It can create fresh-task schedules with friendly minute, hourly, daily, weekday, and weekly presets or a custom RRULE; existing schedules can be edited, paused, resumed, or deleted with revision checks and confirmation for destructive actions.
 
 The recurrence engine accepts a bounded RRULE subset covering minutely, hourly, daily, and weekly schedules. It rejects multi-line, unusually dense, or computationally expensive rules instead of allowing schedule evaluation to stall the bridge.
 
@@ -145,7 +148,12 @@ Wirebot's design rule is to use Codex's native app-server behavior instead of bu
 
 ## Settings Mini App
 
-The Mini App is pinned to the bot's **Settings** menu button when its public URL is available; `/config` remains an equivalent entry point. At startup Wirebot reconciles both Telegram's default button and each allowlisted private chat, so a stale chat-specific command-menu override cannot hide the Mini App. It uses source-owned UI components styled with Tailwind and accepts only signed Telegram `initData` from allowlisted private users. Its tab bar keeps the settings screen first and adds a **Skills** screen listing every enabled skill from Codex's native `skills/list` response. Opening a skill shows its `SKILL.md` instructions and a read-only browser for bundled scripts, references, images, and other files. Skill paths remain confined to that skill's directory, and oversized files are not loaded into the browser.
+The Mini App is pinned to the bot's **Settings** menu button when its public URL is available; `/config` remains an equivalent entry point. At startup Wirebot reconciles both Telegram's default button and each allowlisted private chat, so a stale chat-specific command-menu override cannot hide the Mini App. It uses source-owned UI components styled with Tailwind and accepts only signed Telegram `initData` from allowlisted private users. Its tab bar keeps **Settings** first, **Skills** second, and adds a **Schedules** screen for owner-scoped schedule management. The Skills screen lists every enabled skill from Codex's native `skills/list` response. Opening a skill shows its `SKILL.md` instructions and a read-only browser for bundled scripts, references, images, and other files. Skill paths remain confined to that skill's directory, and oversized files are not loaded into the browser.
+
+Inside Telegram, nested Mini App screens use the native header back button; ordinary browser
+rendering keeps the in-page back controls. Every multiline input can open a focused full-screen
+editor with a local draft and explicit Apply action. Unsaved Settings and Schedule drafts are
+protected on back navigation, tab changes, browser unload, and Telegram Mini App close.
 
 The settings tab includes a default-on remote session context toggle and covers the everyday settings from Codex's [basic configuration guide](https://learn.chatgpt.com/docs/config-file/config-basic), including models, reasoning, approval policy, permission profiles, sandboxing, web search, shell environment, and supported feature flags. Turning remote session context off stops Wirebot from adding its connector-aware instructions to Codex turns.
 
@@ -162,7 +170,7 @@ The runtime card in the Mini App shows the current outcome and offers **Apply ch
 
 ## Source development
 
-Requirements: [Bun](https://bun.com) 1.3 or newer (plus Node.js for the Vitest suite).
+Requirements: [Bun](https://bun.com) 1.3 or newer.
 
 ```sh
 git clone https://github.com/sadfun/wirebot.git
@@ -176,7 +184,6 @@ Development commands:
 
 ```sh
 bun run check      # typecheck + biome
-bun run test       # vitest suite
 bun run compile    # single-file executable in dist/wirebot
 docker build .     # the release image
 ```
@@ -184,6 +191,8 @@ docker build .     # the release image
 Source runs keep Codex's `workspace-write` sandbox default and store state under `./.wirebot`. The compiled executable embeds the app version, the Codex pin, and bytecode with maximum optimizations; Mini App assets and the pinned toolchains are baked into the image alongside it.
 
 The handwritten application is strict TypeScript. Messaging transports depend only on `src/core/channel.ts`; Telegram is the first implementation.
+
+The previous mock-based unit suite has been removed. Tests are being rebuilt as end-to-end runs that exercise the actual container image.
 
 ### Codex protocol updates
 
@@ -204,7 +213,7 @@ The check uses the candidate binary's `app-server generate-ts` output and compar
 ### Publishing a release
 
 1. Update the version in `package.json`.
-2. Run `bun run check` and `bun run test`.
+2. Run `bun run check` and `bun run compile`.
 3. Push a matching tag such as `v0.2.0`.
 
 The Release workflow verifies the tag, runs the checks, builds the `linux/amd64` and `linux/arm64` images, and pushes them to `ghcr.io/sadfun/wirebot` tagged with the version and `latest` (prereleases skip `latest`).

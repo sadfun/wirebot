@@ -65,6 +65,26 @@ const deleteOperationSchema = z.strictObject({
   id: z.string().trim().min(1).max(256),
 });
 
+const miniAppCreateScheduleSchema = createOperationSchema.omit({ mode: true, kind: true }).extend({
+  idempotency_key: z.string().trim().min(1).max(128),
+});
+
+const miniAppUpdateScheduleSchema = updateOperationSchema
+  .omit({ mode: true, id: true })
+  .extend({ expected_revision: z.number().int().nonnegative() })
+  .refine(
+    (operation) =>
+      operation.name !== undefined ||
+      operation.prompt !== undefined ||
+      operation.rrule !== undefined ||
+      operation.time_zone !== undefined ||
+      operation.status !== undefined ||
+      operation.notification_policy !== undefined ||
+      operation.model !== undefined ||
+      operation.reasoning_effort !== undefined,
+    { message: "At least one schedule change is required" },
+  );
+
 const automationOperationSchema = z.discriminatedUnion("mode", [
   viewOperationSchema,
   createOperationSchema,
@@ -80,10 +100,39 @@ const scheduledResultSchema = z.strictObject({
 
 const scheduledResultJsonSchema = toolJsonSchema(scheduledResultSchema);
 
+export interface ManagedSchedule {
+  readonly id: string;
+  readonly kind: "cron" | "heartbeat";
+  readonly name: string;
+  readonly prompt: string;
+  readonly status: "active" | "paused";
+  readonly rrule: string;
+  readonly time_zone: string;
+  readonly next_run_at: string | null;
+  readonly last_run_at: string | null;
+  readonly notification_policy: "always" | "on-result" | "never";
+  readonly model: string | null;
+  readonly reasoning_effort: string | null;
+  readonly deferral_reason: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly revision: number;
+}
+
+export class AutomationManagementError extends Error {
+  public override readonly name = "AutomationManagementError";
+  public readonly code: "conflict" | "invalid" | "not_found";
+
+  public constructor(code: "conflict" | "invalid" | "not_found", message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
 const automationUpdateSpec = {
   type: "function",
   name: "automation_update",
-  description: `Manage Wirebot scheduled runs. Use this whenever the user asks to schedule, repeat, monitor, remind, follow up later, list schedules, pause, resume, change, or delete a scheduled task. Use kind "heartbeat" to revisit this same Codex thread; use "cron" for a fresh persistent thread on every run. Wirebot accepts a bounded RFC 5545 RRULE subset: MINUTELY with INTERVAL; HOURLY with optional BYMINUTE; DAILY or WEEKLY with optional BYMINUTE, BYHOUR, and BYDAY; plus UNTIL, and WKST for WEEKLY. Use one line, no DTSTART, and keep BY lists small. Do not invent owners, destinations, or thread IDs: Wirebot binds them to the current conversation.`,
+  description: `Manage Wirebot scheduled runs. Use this whenever the user asks to schedule, repeat, monitor, remind, follow up later, list schedules, pause, resume, change, or delete a scheduled task. Use kind "heartbeat" to revisit this same Codex thread; use "cron" for a fresh persistent thread on every run. Wirebot accepts a bounded RFC 5545 RRULE subset: MINUTELY with INTERVAL; HOURLY with optional BYMINUTE; DAILY or WEEKLY with optional BYMINUTE, BYHOUR, and BYDAY; plus UNTIL, and WKST for WEEKLY. Use one line, no DTSTART, and keep BY lists small. New schedules and unfiltered lists bind to the current conversation; an existing schedule explicitly identified by id can be viewed, updated, or deleted from any conversation owned by the same authenticated user. Do not invent owners, destinations, or thread IDs.`,
   inputSchema: toolJsonSchema(automationOperationSchema),
 } as const satisfies CodexDynamicTool["spec"];
 
@@ -206,6 +255,59 @@ export class ScheduledRunsEngine {
           sameReference(automation.conversation, conversation),
       )
       .map((automation) => ({ ...automation, kind: automationKind(automation) }));
+  }
+
+  /** Lists every schedule owned by a user, including schedules created in other conversations. */
+  public listForOwner(owner: ProviderReference): readonly ManagedSchedule[] {
+    return this.#store
+      .listAutomations()
+      .filter((automation) => sameReference(automation.owner, owner))
+      .map(summarizeAutomation);
+  }
+
+  /** Creates a fresh-task schedule from the authenticated Mini App. */
+  public async createForOwner(
+    owner: ProviderReference,
+    conversation: ProviderReference,
+    deliveryTarget: ProviderReference,
+    input: unknown,
+  ): Promise<Readonly<{ created: boolean; schedule: ManagedSchedule }>> {
+    const { idempotency_key: idempotencyKey, ...values } = miniAppCreateScheduleSchema.parse(input);
+    const operation = createOperationSchema.parse({
+      mode: "create",
+      kind: "cron",
+      ...values,
+    });
+    const id = stableAutomationId("miniapp", owner.provider, owner.id, idempotencyKey);
+    const result = await this.createAutomation(operation, {
+      id,
+      owner,
+      conversation,
+      deliveryTarget,
+      threadId: null,
+    });
+    return { created: result.created, schedule: summarizeAutomation(result.automation) };
+  }
+
+  /** Updates an owned schedule with optimistic revision protection. */
+  public async updateForOwner(
+    owner: ProviderReference,
+    id: string,
+    input: unknown,
+  ): Promise<ManagedSchedule> {
+    const { expected_revision: expectedRevision, ...changes } =
+      miniAppUpdateScheduleSchema.parse(input);
+    const operation = updateOperationSchema.parse({ mode: "update", id, ...changes });
+    const updated = await this.updateAutomation(operation, owner, undefined, expectedRevision);
+    return summarizeAutomation(updated);
+  }
+
+  /** Permanently deletes an owned schedule and its retained run history. */
+  public async deleteForOwner(owner: ProviderReference, id: string): Promise<void> {
+    this.requireOwnedAutomation(id, owner);
+    if (!(await this.#store.deleteAutomation(id))) {
+      throw new AutomationManagementError("not_found", "Schedule not found");
+    }
   }
 
   public async contextForReply(
@@ -469,6 +571,132 @@ export class ScheduledRunsEngine {
     }
   }
 
+  private async createAutomation(
+    operation: z.infer<typeof createOperationSchema>,
+    binding: Readonly<{
+      id: string;
+      owner: ProviderReference;
+      conversation: ProviderReference;
+      deliveryTarget: ProviderReference;
+      threadId: string | null;
+    }>,
+  ): Promise<Readonly<{ created: boolean; automation: AutomationDefinition }>> {
+    const existing = this.#store.getAutomation(binding.id);
+    if (existing !== undefined) {
+      if (
+        !sameReference(existing.owner, binding.owner) ||
+        !sameReference(existing.conversation, binding.conversation)
+      ) {
+        throw new Error("Automation ID collision");
+      }
+      await this.ensureMemoryFile(existing.id);
+      return { created: false, automation: existing };
+    }
+    if (
+      this.listForConversation(binding.owner, binding.conversation).length >=
+      maximumAutomationsPerConversation
+    ) {
+      throw new AutomationManagementError(
+        "invalid",
+        `This conversation already has ${maximumAutomationsPerConversation} scheduled runs`,
+      );
+    }
+    const now = this.currentDate();
+    const timeZone = operation.time_zone ?? localTimeZone();
+    const startAt = new Date(Math.ceil(now.getTime() / 60_000) * 60_000).toISOString();
+    const schedule = { rrule: operation.rrule, startAt, timeZone };
+    const nextRunAt = nextOccurrence(schedule, now);
+    if (nextRunAt === null) {
+      throw new AutomationManagementError("invalid", "The schedule has no future occurrence");
+    }
+    const automation: AutomationDefinition = {
+      id: binding.id,
+      owner: binding.owner,
+      conversation: binding.conversation,
+      deliveryTarget: binding.deliveryTarget,
+      name: operation.name,
+      prompt: operation.prompt,
+      status: "active",
+      schedule,
+      threadId: binding.threadId,
+      notificationPolicy:
+        operation.notification_policy ?? (operation.kind === "heartbeat" ? "on-result" : "always"),
+      model: operation.model ?? null,
+      reasoningEffort: operation.reasoning_effort ?? null,
+      nextRunAt: nextRunAt.toISOString(),
+      lastRunAt: null,
+      deferredUntil: null,
+      deferralReason: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      revision: 0,
+    };
+    await this.ensureMemoryFile(automation.id);
+    await this.#store.putAutomation(automation);
+    return { created: true, automation };
+  }
+
+  private async updateAutomation(
+    operation: z.infer<typeof updateOperationSchema>,
+    owner: ProviderReference,
+    conversation?: ProviderReference,
+    expectedRevision?: number,
+  ): Promise<AutomationDefinition> {
+    if (conversation === undefined) this.requireOwnedAutomation(operation.id, owner);
+    else this.requireAccessibleAutomation(operation.id, owner, conversation);
+    const now = this.currentDate();
+    const updated = await this.#store.updateAutomation(operation.id, (current) => {
+      const accessible =
+        sameReference(current.owner, owner) &&
+        (conversation === undefined || sameReference(current.conversation, conversation));
+      if (!accessible) {
+        throw new AutomationManagementError("not_found", "Schedule not found");
+      }
+      if (expectedRevision !== undefined && current.revision !== expectedRevision) {
+        throw new AutomationManagementError(
+          "conflict",
+          "This schedule changed since you opened it. Refresh and try again.",
+        );
+      }
+      const schedule = {
+        ...current.schedule,
+        ...(operation.rrule === undefined ? {} : { rrule: operation.rrule }),
+        ...(operation.time_zone === undefined ? {} : { timeZone: operation.time_zone }),
+      };
+      const status = operation.status ?? current.status;
+      const candidateNextRunAt = nextOccurrence(schedule, now);
+      if (status === "active" && candidateNextRunAt === null) {
+        throw new AutomationManagementError(
+          "invalid",
+          "The updated schedule has no future occurrence",
+        );
+      }
+      return {
+        ...current,
+        ...(operation.name === undefined ? {} : { name: operation.name }),
+        ...(operation.prompt === undefined ? {} : { prompt: operation.prompt }),
+        ...(operation.notification_policy === undefined
+          ? {}
+          : { notificationPolicy: operation.notification_policy }),
+        ...(operation.model === undefined ? {} : { model: operation.model }),
+        ...(operation.reasoning_effort === undefined
+          ? {}
+          : { reasoningEffort: operation.reasoning_effort }),
+        schedule,
+        status,
+        nextRunAt: status === "paused" ? null : (candidateNextRunAt?.toISOString() ?? null),
+        deferredUntil: null,
+        deferralReason: null,
+        updatedAt: now.toISOString(),
+        revision: current.revision + 1,
+      };
+    });
+    if (updated === undefined) {
+      throw new AutomationManagementError("not_found", "Schedule not found");
+    }
+    return updated;
+  }
+
   private async executeTool(
     argumentsValue: unknown,
     context: CodexDynamicToolContext,
@@ -480,9 +708,7 @@ export class ScheduledRunsEngine {
     switch (operation.mode) {
       case "view": {
         if (operation.id !== undefined) {
-          return summarizeAutomation(
-            this.requireAccessibleAutomation(operation.id, owner, conversation),
-          );
+          return summarizeAutomation(this.requireOwnedAutomation(operation.id, owner));
         }
         return {
           automations: this.listForConversation(owner, conversation).map(summarizeAutomation),
@@ -493,97 +719,24 @@ export class ScheduledRunsEngine {
           throw new Error("This messaging session cannot receive scheduled results");
         }
         const id = stableAutomationId(context.threadId, context.callId);
-        const existing = this.#store.getAutomation(id);
-        if (existing !== undefined) {
-          if (
-            !sameReference(existing.owner, owner) ||
-            !sameReference(existing.conversation, conversation)
-          ) {
-            throw new Error("Automation ID collision");
-          }
-          await this.ensureMemoryFile(existing.id);
-          return { created: false, automation: summarizeAutomation(existing) };
-        }
-        const now = this.currentDate();
-        if (
-          this.listForConversation(owner, conversation).length >= maximumAutomationsPerConversation
-        ) {
-          throw new Error(
-            `This conversation already has ${maximumAutomationsPerConversation} scheduled runs`,
-          );
-        }
-        const timeZone = operation.time_zone ?? localTimeZone();
-        const startAt = new Date(Math.ceil(now.getTime() / 60_000) * 60_000).toISOString();
-        const schedule = { rrule: operation.rrule, startAt, timeZone };
-        const nextRunAt = nextOccurrence(schedule, now);
-        if (nextRunAt === null) throw new Error("The schedule has no future occurrence");
-        const automation: AutomationDefinition = {
+        const result = await this.createAutomation(operation, {
           id,
           owner,
           conversation,
           deliveryTarget: context.deliveryTarget,
-          name: operation.name,
-          prompt: operation.prompt,
-          status: "active",
-          schedule,
           threadId: operation.kind === "heartbeat" ? context.threadId : null,
-          notificationPolicy:
-            operation.notification_policy ??
-            (operation.kind === "heartbeat" ? "on-result" : "always"),
-          model: operation.model ?? null,
-          reasoningEffort: operation.reasoning_effort ?? null,
-          nextRunAt: nextRunAt.toISOString(),
-          lastRunAt: null,
-          deferredUntil: null,
-          deferralReason: null,
-          createdAt: now.toISOString(),
-          updatedAt: now.toISOString(),
-          revision: 0,
+        });
+        return {
+          created: result.created,
+          automation: summarizeAutomation(result.automation),
         };
-        await this.ensureMemoryFile(automation.id);
-        await this.#store.putAutomation(automation);
-        return { created: true, automation: summarizeAutomation(automation) };
       }
       case "update": {
-        this.requireAccessibleAutomation(operation.id, owner, conversation);
-        const now = this.currentDate();
-        const updated = await this.#store.updateAutomation(operation.id, (current) => {
-          const schedule = {
-            ...current.schedule,
-            ...(operation.rrule === undefined ? {} : { rrule: operation.rrule }),
-            ...(operation.time_zone === undefined ? {} : { timeZone: operation.time_zone }),
-          };
-          const status = operation.status ?? current.status;
-          const candidateNextRunAt = nextOccurrence(schedule, now)?.toISOString();
-          const nextRunAt = status === "paused" ? null : candidateNextRunAt;
-          if (status === "active" && nextRunAt === undefined) {
-            throw new Error("The updated schedule has no future occurrence");
-          }
-          return {
-            ...current,
-            ...(operation.name === undefined ? {} : { name: operation.name }),
-            ...(operation.prompt === undefined ? {} : { prompt: operation.prompt }),
-            ...(operation.notification_policy === undefined
-              ? {}
-              : { notificationPolicy: operation.notification_policy }),
-            ...(operation.model === undefined ? {} : { model: operation.model }),
-            ...(operation.reasoning_effort === undefined
-              ? {}
-              : { reasoningEffort: operation.reasoning_effort }),
-            schedule,
-            status,
-            nextRunAt: nextRunAt ?? null,
-            deferredUntil: null,
-            deferralReason: null,
-            updatedAt: now.toISOString(),
-            revision: current.revision + 1,
-          };
-        });
-        if (updated === undefined) throw new Error("Automation not found");
+        const updated = await this.updateAutomation(operation, owner);
         return { updated: true, automation: summarizeAutomation(updated) };
       }
       case "delete": {
-        this.requireAccessibleAutomation(operation.id, owner, conversation);
+        this.requireOwnedAutomation(operation.id, owner);
         await this.#store.deleteAutomation(operation.id);
         return { deleted: true, id: operation.id };
       }
@@ -732,6 +885,14 @@ export class ScheduledRunsEngine {
     return automation;
   }
 
+  private requireOwnedAutomation(id: string, owner: ProviderReference): AutomationDefinition {
+    const automation = this.#store.getAutomation(id);
+    if (automation === undefined || !sameReference(automation.owner, owner)) {
+      throw new AutomationManagementError("not_found", "Schedule not found");
+    }
+    return automation;
+  }
+
   private async ensureMemoryFile(automationId: string): Promise<string> {
     const directory = join(this.#workspace, ".wirebot", "automations", automationId);
     const path = join(directory, "memory.md");
@@ -758,8 +919,10 @@ function toolJsonSchema(schema: z.ZodType): JsonValue {
   return jsonSchema as JsonValue;
 }
 
-function stableAutomationId(threadId: string, callId: string): string {
-  const value = createHash("sha256").update(threadId).update("\0").update(callId).digest("hex");
+function stableAutomationId(...parts: readonly string[]): string {
+  const hash = createHash("sha256");
+  for (const part of parts) hash.update(part).update("\0");
+  const value = hash.digest("hex");
   return `auto_${value.slice(0, 32)}`;
 }
 
@@ -800,7 +963,7 @@ function parseScheduledResult(text: string): z.infer<typeof scheduledResultSchem
   }
 }
 
-function summarizeAutomation(automation: AutomationDefinition): unknown {
+function summarizeAutomation(automation: AutomationDefinition): ManagedSchedule {
   return {
     id: automation.id,
     kind: automationKind(automation),
@@ -814,6 +977,10 @@ function summarizeAutomation(automation: AutomationDefinition): unknown {
     notification_policy: automation.notificationPolicy,
     model: automation.model,
     reasoning_effort: automation.reasoningEffort,
+    deferral_reason: automation.deferralReason,
+    created_at: automation.createdAt,
+    updated_at: automation.updatedAt,
+    revision: automation.revision,
   };
 }
 

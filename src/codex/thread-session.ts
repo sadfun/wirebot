@@ -56,6 +56,7 @@ export interface FinalizedTurn {
  */
 interface PendingTurnStart {
   claim(turnId: string): TurnView;
+  waitForClaim(): Promise<TurnView>;
   /** Withdraw an unclaimed start; returns the view if it was claimed anyway. */
   cancel(): TurnView | undefined;
 }
@@ -68,6 +69,7 @@ interface TurnView extends TurnPresentation {
   readonly reasoning: Map<string, readonly string[]>;
   readonly generatedPaths: string[];
   plan: readonly ProgressPlanStep[];
+  statusSummary: string | undefined;
   progressMessage: string;
   finalText: string;
   interrupting: Promise<void> | undefined;
@@ -83,6 +85,7 @@ export interface ThreadSessionContext {
 
 interface ParkedTurnStart {
   readonly presentation: TurnPresentation;
+  readonly claimed: Deferred<TurnView>;
   view: TurnView | undefined;
 }
 
@@ -142,10 +145,15 @@ export class ThreadSession {
    */
   public expectTurn(presentation: TurnPresentation): PendingTurnStart {
     this.#stopRequested = false;
-    const parked: ParkedTurnStart = { presentation, view: undefined };
+    const claimed = deferred<TurnView>();
+    // Most turn/start callers claim directly from the RPC response rather
+    // than awaiting the notification-driven promise.
+    void claimed.promise.catch(() => undefined);
+    const parked: ParkedTurnStart = { presentation, claimed, view: undefined };
     this.#parkedStarts.push(parked);
     return {
       claim: (turnId: string) => this.claimParked(parked, turnId),
+      waitForClaim: async () => await claimed.promise,
       cancel: () => {
         const index = this.#parkedStarts.indexOf(parked);
         if (index !== -1) this.#parkedStarts.splice(index, 1);
@@ -232,6 +240,7 @@ export class ThreadSession {
   public fail(error: Error): void {
     for (const controller of this.#serverRequests.values()) controller.abort();
     this.#serverRequests.clear();
+    for (const parked of this.#parkedStarts) parked.claimed.reject(error);
     this.#parkedStarts.length = 0;
     for (const view of [...this.#views.values()]) {
       this.#views.delete(view.turnId);
@@ -251,8 +260,10 @@ export class ThreadSession {
         this.handleTurnCompleted(notification.params.turn);
         return;
       case "item/started":
+        this.handleItem(notification.params.turnId, notification.params.item, "started");
+        return;
       case "item/completed":
-        this.handleItem(notification.params.turnId, notification.params.item);
+        this.handleItem(notification.params.turnId, notification.params.item, "completed");
         return;
       case "item/agentMessage/delta": {
         const view = this.#views.get(notification.params.turnId);
@@ -329,6 +340,7 @@ export class ThreadSession {
     const index = this.#parkedStarts.indexOf(parked);
     if (index !== -1) this.#parkedStarts.splice(index, 1);
     parked.view = this.bindView(turnId, parked.presentation);
+    parked.claimed.resolve(parked.view);
     return parked.view;
   }
 
@@ -361,6 +373,7 @@ export class ThreadSession {
       reasoning: new Map(),
       generatedPaths: [],
       plan: [],
+      statusSummary: undefined,
       progressMessage: "",
       finalText: "",
       interrupting: undefined,
@@ -373,9 +386,15 @@ export class ThreadSession {
     return view;
   }
 
-  private handleItem(turnId: string, item: ThreadItem): void {
+  private handleItem(turnId: string, item: ThreadItem, lifecycle: "started" | "completed"): void {
     const view = this.#views.get(turnId);
     if (view === undefined) return;
+    if (item.type === "contextCompaction") {
+      view.statusSummary =
+        lifecycle === "started" ? "Compacting context…" : "Context compacted, continuing…";
+    } else if (lifecycle === "started" && view.statusSummary !== undefined) {
+      view.statusSummary = undefined;
+    }
     if (item.type === "agentMessage") {
       view.phases.set(item.id, item.phase);
       if (item.phase === "commentary") {
@@ -400,10 +419,12 @@ export class ThreadSession {
   }
 
   private publishProgress(view: TurnView): void {
-    const summary = Array.from(view.reasoning.values())
-      .reverse()
-      .flatMap((summaries) => [...summaries].reverse())
-      .find((value) => value.trim().length > 0);
+    const summary =
+      view.statusSummary ??
+      Array.from(view.reasoning.values())
+        .reverse()
+        .flatMap((summaries) => [...summaries].reverse())
+        .find((value) => value.trim().length > 0);
     const progress: ProgressSnapshot = {
       ...(summary === undefined ? {} : { summary }),
       ...(view.progressMessage.trim().length === 0 ? {} : { message: view.progressMessage }),
@@ -444,7 +465,7 @@ export class ThreadSession {
       };
       if (view.origin !== "scheduled") {
         await view.stream.complete(
-          deliveryText(view.origin, turn.status, finalText, resolution),
+          deliveryText(view.origin, turn, finalText, resolution),
           resolution.attachments,
         );
         await dispose();
@@ -471,19 +492,22 @@ export class ThreadSession {
 
 function deliveryText(
   origin: TurnOrigin,
-  status: Turn["status"],
+  turn: Turn,
   finalText: string,
   resolution: Readonly<{
     attachments: readonly OutboundAttachment[];
     unavailable: readonly string[];
   }>,
 ): string {
-  if (status === "interrupted" && finalText.length === 0) return "Stopped.";
+  if (turn.status === "interrupted" && finalText.length === 0) return "Stopped.";
   const text =
     resolution.unavailable.length === 0
       ? finalText
       : `Could not attach ${resolution.unavailable.join(", ")}.${finalText.length === 0 ? "" : `\n\n${finalText}`}`;
   if (text.length > 0) return text;
+  if (turn.items.some((item) => item.type === "contextCompaction")) {
+    return "Context compacted.";
+  }
   return origin === "user" && resolution.attachments.length === 0 ? "Done." : "";
 }
 

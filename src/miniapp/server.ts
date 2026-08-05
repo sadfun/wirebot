@@ -3,6 +3,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZodError, z } from "zod";
+import { AutomationManagementError, type ScheduledRunsEngine } from "../automations/engine.js";
+import { RecurrenceError } from "../automations/recurrence.js";
+import { telegramDeliveryTarget } from "../channels/telegram/references.js";
 import {
   type CodexConfigService,
   ConfigValidationError,
@@ -11,10 +14,11 @@ import {
 import { CodexRpcError } from "../codex/rpc.js";
 import type { CodexRuntimeService } from "../codex/runtime-service.js";
 import { SkillBrowserError } from "../codex/skill-browser.js";
+import type { ProviderReference } from "../core/channel.js";
 import type { WirebotSettingsStore } from "../core/settings-store.js";
 import { BridgeError } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
-import { validateTelegramInitData } from "./auth.js";
+import { type TelegramInitDataUser, validateTelegramInitData } from "./auth.js";
 
 const MAX_REQUEST_BYTES = 32 * 1_024;
 const DEFAULT_MAX_AUTH_AGE_SECONDS = 60 * 60;
@@ -45,6 +49,7 @@ export interface MiniAppServerOptions {
   readonly settings: WirebotSettingsStore;
   readonly logger: Logger;
   readonly assetDirectory?: string;
+  readonly scheduledRuns?: MiniAppSchedulesController;
 }
 
 /** Narrow runtime surface exposed to the authenticated settings Mini App. */
@@ -60,14 +65,21 @@ export type MiniAppRuntimeController = Pick<
   | "restart"
 >;
 
+export type MiniAppSchedulesController = Pick<
+  ScheduledRunsEngine,
+  "listForOwner" | "createForOwner" | "updateForOwner" | "deleteForOwner"
+>;
+
 export class MiniAppServer {
   private readonly options: MiniAppServerOptions;
   readonly #server: Server;
   readonly #assetDirectory: string;
+  #scheduledRuns: MiniAppSchedulesController | undefined;
   #started = false;
 
   public constructor(options: MiniAppServerOptions) {
     this.options = options;
+    this.#scheduledRuns = options.scheduledRuns;
     this.#assetDirectory =
       options.assetDirectory ??
       fileURLToPath(new URL("../../dist/miniapp/public", import.meta.url));
@@ -81,6 +93,14 @@ export class MiniAppServer {
         else response.destroy();
       });
     });
+  }
+
+  /** Connects the scheduler after tunnel discovery and Telegram channel construction. */
+  public setScheduledRuns(controller: MiniAppSchedulesController): void {
+    if (this.#scheduledRuns !== undefined && this.#scheduledRuns !== controller) {
+      throw new Error("The Mini App scheduler controller is already connected");
+    }
+    this.#scheduledRuns = controller;
   }
 
   public async start(): Promise<void> {
@@ -241,6 +261,50 @@ export class MiniAppServer {
       return;
     }
 
+    if (url.pathname === "/api/schedules" || url.pathname.startsWith("/api/schedules/")) {
+      const user = this.authenticate(request);
+      const scheduledRuns = this.requireScheduledRuns();
+      const scope = telegramScheduleScope(user.id);
+      if (url.pathname === "/api/schedules") {
+        if (request.method === "GET") {
+          this.sendJson(response, 200, { schedules: scheduledRuns.listForOwner(scope.owner) });
+          return;
+        }
+        if (request.method === "POST") {
+          const result = await scheduledRuns.createForOwner(
+            scope.owner,
+            scope.conversation,
+            scope.deliveryTarget,
+            await this.readJson(request),
+          );
+          this.sendJson(response, result.created ? 201 : 200, result);
+          return;
+        }
+        response.setHeader("Allow", "GET, POST");
+        this.sendError(response, 405, "Method not allowed");
+        return;
+      }
+
+      const id = scheduleIdFromPath(url.pathname);
+      if (request.method === "PATCH") {
+        const schedule = await scheduledRuns.updateForOwner(
+          scope.owner,
+          id,
+          await this.readJson(request),
+        );
+        this.sendJson(response, 200, { schedule });
+        return;
+      }
+      if (request.method === "DELETE") {
+        await scheduledRuns.deleteForOwner(scope.owner, id);
+        this.sendJson(response, 200, { deleted: true, id });
+        return;
+      }
+      response.setHeader("Allow", "PATCH, DELETE");
+      this.sendError(response, 405, "Method not allowed");
+      return;
+    }
+
     if (url.pathname === "/api/runtime/reload" || url.pathname === "/api/runtime/restart") {
       this.authenticate(request);
       if (request.method === "POST") {
@@ -275,16 +339,23 @@ export class MiniAppServer {
     this.sendError(response, 404, "Not found");
   }
 
-  private authenticate(request: IncomingMessage): void {
+  private authenticate(request: IncomingMessage): TelegramInitDataUser {
     const authorization = request.headers.authorization;
     if (authorization === undefined || !authorization.toLowerCase().startsWith("tma ")) {
       throw new BridgeError("Telegram authorization is required", "MINIAPP_UNAUTHORIZED");
     }
-    validateTelegramInitData(authorization.slice(4), {
+    return validateTelegramInitData(authorization.slice(4), {
       botToken: this.options.botToken,
       allowedUserIds: this.options.allowedUserIds,
       maxAgeSeconds: DEFAULT_MAX_AUTH_AGE_SECONDS,
     });
+  }
+
+  private requireScheduledRuns(): MiniAppSchedulesController {
+    if (this.#scheduledRuns === undefined) {
+      throw new HttpError(503, "Schedules are still starting. Try again in a moment.");
+    }
+    return this.#scheduledRuns;
   }
 
   private async readJson(request: IncomingMessage): Promise<unknown> {
@@ -360,9 +431,18 @@ export class MiniAppServer {
     }
     if (error instanceof ZodError) {
       this.sendJson(response, 400, {
-        error: "Invalid config update",
+        error: "Invalid request",
         issues: normalizeZodIssues(error),
       });
+      return;
+    }
+    if (error instanceof RecurrenceError) {
+      this.sendError(response, 400, error.message);
+      return;
+    }
+    if (error instanceof AutomationManagementError) {
+      const status = error.code === "not_found" ? 404 : error.code === "conflict" ? 409 : 400;
+      this.sendError(response, status, error.message);
       return;
     }
     if (error instanceof ConfigValidationError) {
@@ -402,6 +482,36 @@ export class MiniAppServer {
     }
     this.sendError(response, 500, "Internal server error");
   }
+}
+
+function telegramScheduleScope(userId: number): Readonly<{
+  owner: ProviderReference;
+  conversation: ProviderReference;
+  deliveryTarget: ProviderReference;
+}> {
+  return {
+    owner: { provider: "telegram", resource: "user", id: String(userId) },
+    conversation: {
+      provider: "telegram",
+      resource: "conversation",
+      id: `telegram:${userId}:0`,
+    },
+    deliveryTarget: telegramDeliveryTarget(userId, { destination: { kind: "chat" } }),
+  };
+}
+
+function scheduleIdFromPath(pathname: string): string {
+  const encoded = pathname.slice("/api/schedules/".length);
+  if (encoded.length === 0 || encoded.includes("/")) {
+    throw new HttpError(404, "Schedule not found");
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(encoded);
+  } catch {
+    throw new HttpError(400, "Invalid schedule ID");
+  }
+  return z.string().trim().min(1).max(256).parse(decoded);
 }
 
 function normalizeZodIssues(error: ZodError): ConfigValidationIssue[] {

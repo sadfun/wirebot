@@ -333,7 +333,7 @@ function TabbarRoot({ className, children, ...props }: TabbarProps): ReactElemen
       )}
       {...props}
     >
-      <div className="mx-auto grid w-full max-w-md grid-cols-2 gap-2">{children}</div>
+      <div className="mx-auto grid w-full max-w-md grid-cols-3 gap-1">{children}</div>
     </nav>
   );
 }

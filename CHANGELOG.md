@@ -4,7 +4,23 @@ All notable changes to Wirebot are documented in this file.
 
 ## [0.1.0] - Unreleased
 
-Initial Wirebot release, forked from [Telex](https://github.com/sadfun/telex) 0.0.28. The bridge behavior — conversations, scheduled runs, voice transcription, media handling, the settings Mini App — carries over; the product, runtime, and deployment model are new.
+Initial Wirebot release, forked from [Telex](https://github.com/sadfun/telex) 0.0.28 and synced with Telex through 0.0.34. The bridge behavior — conversations, scheduled runs, voice transcription, media handling, the settings Mini App — carries over; the product, runtime, and deployment model are new.
+
+### Added
+
+- `/compact` through Codex app-server's native compaction turn, with busy protection and visible
+  progress for both manual and Codex-triggered automatic context compaction.
+- An authenticated **Schedules** Mini App tab for viewing, creating, editing, pausing, resuming,
+  and deleting owner-scoped schedules, with friendly cadence presets, custom RRULEs,
+  revision-safe updates, and explicit delete confirmation.
+- Telegram's native Mini App back button for nested Skills, Schedules, dialogs, and the
+  full-screen editor, with in-page back controls retained outside Telegram.
+- A mobile full-screen editor for every multiline Mini App input, with a local draft, character
+  count, explicit Apply action, and discard confirmation.
+- An authenticated owner can view, update, or delete an explicitly identified schedule from
+  another conversation without changing its original delivery or thread binding.
+- Unsaved Settings and Schedule drafts are protected when navigating between tabs, going back,
+  closing the Telegram Mini App, or unloading the page.
 
 ### Changed
 
@@ -14,8 +30,15 @@ Initial Wirebot release, forked from [Telex](https://github.com/sadfun/telex) 0.
 - The runtime is Bun: releases are a single compiled executable built with bytecode compilation, minification, and embedded sourcemaps; the app version and Codex pin embed at build time; the Mini App client bundles with `Bun.build`.
 - The pinned Codex CLI installs from the npm registry's platform tarball, verified against the registry integrity digest, and Wirebot spawns the native vendored binary directly — Node and npm are no longer needed anywhere. Pinned toolchains (Codex, cloudflared, curl-impersonate) are baked into the image; source runs still download them on demand. Install markers record the platform target so a data volume cannot serve wrong-architecture binaries.
 
+### Fixed
+
+- Extract the pinned voice transport without restoring archive ownership on Linux, so
+  transcription installs under rootless containers and other restricted runtimes.
+
 ### Removed
 
 - The in-place self-update subsystem: the release installer script, versioned release directories, the `current` symlink, rollback, the `/update` command, the exit-75 restart contract, and the `TELEX_UPDATE_*` / `TELEX_INSTALL_DIR` configuration. Container images are immutable; updates are a `docker compose pull` away.
+- The mock-heavy vitest unit suite. Wirebot's tests are being rebuilt from scratch as end-to-end
+  runs against the actual container image.
 
 Earlier history lives in the [Telex changelog](https://github.com/sadfun/telex/blob/main/CHANGELOG.md).

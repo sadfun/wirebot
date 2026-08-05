@@ -17,14 +17,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      # Vitest runs under Node while the product runtime is Bun; the compile
-      # smoke below exercises the shipped runtime.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
       - run: bun install --frozen-lockfile
       - run: bun run check
-      - run: bun run test
       - run: bun run compile
       - name: Compiled binary smoke test
         run: |

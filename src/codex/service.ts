@@ -11,6 +11,8 @@ import type { ServerNotification } from "../generated/codex/ServerNotification.j
 import type { ServerRequest } from "../generated/codex/ServerRequest.js";
 import type { JsonValue } from "../generated/codex/serde_json/JsonValue.js";
 import type { AccountLoginCompletedNotification } from "../generated/codex/v2/AccountLoginCompletedNotification.js";
+import type { ChatgptAuthTokensRefreshParams } from "../generated/codex/v2/ChatgptAuthTokensRefreshParams.js";
+import type { ChatgptAuthTokensRefreshResponse } from "../generated/codex/v2/ChatgptAuthTokensRefreshResponse.js";
 import type { CommandExecutionRequestApprovalResponse } from "../generated/codex/v2/CommandExecutionRequestApprovalResponse.js";
 import type { DynamicToolCallParams } from "../generated/codex/v2/DynamicToolCallParams.js";
 import type { DynamicToolCallResponse } from "../generated/codex/v2/DynamicToolCallResponse.js";
@@ -19,6 +21,7 @@ import type { FileChangeRequestApprovalResponse } from "../generated/codex/v2/Fi
 import type { GetAccountResponse } from "../generated/codex/v2/GetAccountResponse.js";
 import type { LoginAccountResponse } from "../generated/codex/v2/LoginAccountResponse.js";
 import type { PermissionsRequestApprovalResponse } from "../generated/codex/v2/PermissionsRequestApprovalResponse.js";
+import type { ThreadCompactStartResponse } from "../generated/codex/v2/ThreadCompactStartResponse.js";
 import type { ThreadResumeResponse } from "../generated/codex/v2/ThreadResumeResponse.js";
 import type { ThreadStartParams } from "../generated/codex/v2/ThreadStartParams.js";
 import type { ThreadStartResponse } from "../generated/codex/v2/ThreadStartResponse.js";
@@ -95,6 +98,11 @@ interface StartTurnRequest extends TurnPresentation {
   readonly onStarted?: () => void;
 }
 
+interface StartCompactionRequest extends TurnPresentation {
+  /** Called once the compaction turn exists and its rendering is session-owned. */
+  readonly onStarted?: () => void;
+}
+
 type LoginCompletedListener = (notification: AccountLoginCompletedNotification) => void;
 
 type CodexThreadSettings = Readonly<
@@ -140,11 +148,17 @@ type ExplicitSkillInputProvider = (
   text: string,
 ) => readonly ExplicitSkillInput[] | Promise<readonly ExplicitSkillInput[]>;
 
-interface CodexServiceProviders {
+export interface CodexServiceProviders {
   readonly effectiveSettings?: EffectiveCodexSettingsProvider;
   readonly explicitSkillInputs?: ExplicitSkillInputProvider;
   /** Static deployment-environment context added to every turn (e.g. the container persistence contract). */
   readonly environmentContext?: ApplicationContext;
+  readonly externalAuthTokens?: (
+    request: ChatgptAuthTokensRefreshParams,
+  ) => Promise<ChatgptAuthTokensRefreshResponse>;
+  readonly now?: () => number;
+  /** Passive lifecycle observer used by isolated E2E tracing. */
+  readonly onTurnStarting?: (threadId: string, conversationKey: string) => void;
 }
 
 export class CodexService {
@@ -166,6 +180,9 @@ export class CodexService {
   readonly #effectiveSettings: EffectiveCodexSettingsProvider;
   readonly #explicitSkillInputs: ExplicitSkillInputProvider;
   readonly #environmentContext: ApplicationContext | undefined;
+  readonly #externalAuthTokens: CodexServiceProviders["externalAuthTokens"];
+  readonly #now: () => number;
+  readonly #onTurnStarting: CodexServiceProviders["onTurnStarting"];
   #pauseGate: Deferred<void> | undefined;
   #idleGate: Deferred<void> | undefined;
   #interruptingScheduledTurns = false;
@@ -198,6 +215,9 @@ export class CodexService {
     this.#effectiveSettings = providers.effectiveSettings ?? (() => ({}));
     this.#explicitSkillInputs = providers.explicitSkillInputs ?? (() => []);
     this.#environmentContext = providers.environmentContext;
+    this.#externalAuthTokens = providers.externalAuthTokens;
+    this.#now = providers.now ?? Date.now;
+    this.#onTurnStarting = providers.onTurnStarting;
     rpc.onNotification((notification) => this.handleNotification(notification));
     rpc.onExit((exit) => this.handleTransportExit(exit.error));
     rpc.setServerRequestHandler(async (request) => await this.handleServerRequest(request));
@@ -228,7 +248,7 @@ export class CodexService {
   }
 
   public tryAcquireBackground(conversationKey: string): BackgroundLeaseDecision {
-    const now = Date.now();
+    const now = this.#now();
     const retryAt = new Date(now + CodexService.#backgroundQuietPeriodMs);
     if ((this.#foregroundWaiting.get(conversationKey) ?? 0) > 0) {
       return { acquired: false, reason: "A user message is waiting.", retryAt };
@@ -293,6 +313,7 @@ export class CodexService {
             }
           }
           const prepared = preparedText === undefined ? text : await preparedText;
+          this.#logger.debug("Preparing Codex turn", { conversationKey, connector });
           const [settings, skillInputs] = await Promise.all([
             this.#effectiveSettings(),
             this.#explicitSkillInputs(prepared),
@@ -306,6 +327,7 @@ export class CodexService {
           const session = this.requireSession(threadId);
           this.#conversationSessions.set(conversationKey, session);
           session.adoptPresenter(conversationKey, connector, responder, invocation);
+          this.#logger.debug("Starting Codex turn", { conversationKey, threadId });
           const finalized = await this.startTurn(session, {
             origin: "user",
             stream,
@@ -319,6 +341,12 @@ export class CodexService {
               started = true;
             },
           });
+          this.#logger.debug("Codex turn finalized", {
+            conversationKey,
+            turnId: finalized.turn.id,
+            status: finalized.turn.status,
+            finalTextLength: finalized.finalText.length,
+          });
           if (finalized.turn.status === "failed") {
             this.#logger.warn("Codex turn failed", {
               conversationKey,
@@ -331,7 +359,7 @@ export class CodexService {
           // Once a turn started, its session owns the stream, including failure.
           if (!started) await stream.fail(errorMessage(error));
         } finally {
-          this.#lastForegroundAt.set(conversationKey, Date.now());
+          this.#lastForegroundAt.set(conversationKey, this.#now());
           this.leaveJob();
         }
       });
@@ -422,6 +450,7 @@ export class CodexService {
     session: ThreadSession,
     request: StartTurnRequest,
   ): Promise<FinalizedTurn> {
+    this.#onTurnStarting?.(session.threadId, request.conversationKey);
     const additionalContext = this.additionalContext(request.connector, request.invocation);
     const pending = session.expectTurn(request);
     let response: TurnStartResponse;
@@ -451,6 +480,29 @@ export class CodexService {
     return await view.terminal.promise;
   }
 
+  /** Start a native compaction turn, whose empty RPC response has no turn ID. */
+  private async startCompaction(
+    session: ThreadSession,
+    request: StartCompactionRequest,
+  ): Promise<FinalizedTurn> {
+    this.#onTurnStarting?.(session.threadId, request.conversationKey);
+    const pending = session.expectTurn(request);
+    try {
+      await this.#rpc.request<ThreadCompactStartResponse>({
+        method: "thread/compact/start",
+        params: { threadId: session.threadId },
+      });
+    } catch (error) {
+      const view = pending.cancel();
+      if (view === undefined) throw error;
+      request.onStarted?.();
+      return await view.terminal.promise;
+    }
+    const view = await pending.waitForClaim();
+    request.onStarted?.();
+    return await view.terminal.promise;
+  }
+
   private async transcribeVoiceMessages(
     text: string,
     attachments: readonly InboundAttachment[],
@@ -475,6 +527,78 @@ export class CodexService {
   public async resetConversation(conversationKey: string): Promise<void> {
     await this.interrupt(conversationKey);
     await this.#conversations.delete(conversationKey);
+  }
+
+  public async compactConversation(
+    conversationKey: string,
+    connector: string,
+    responder: MessageResponder,
+    invocation: CodexInvocationContext = {},
+  ): Promise<boolean> {
+    const storedThread = this.#conversations.get(conversationKey);
+    if (storedThread === undefined) return false;
+    if (
+      this.#conversationSessions.get(conversationKey)?.busy === true ||
+      (this.#foregroundWaiting.get(conversationKey) ?? 0) > 0
+    ) {
+      throw conversationBusyError();
+    }
+    const lease = this.#queue.tryAcquire(conversationKey);
+    if (lease === undefined) throw conversationBusyError();
+    try {
+      await this.enterJob();
+      try {
+        const settings = await this.#effectiveSettings();
+        const threadId = await this.resumeThreadStrict(
+          storedThread,
+          settings.thread ?? {},
+          conversationKey,
+          connector,
+        );
+        const session = this.requireSession(threadId);
+        if (session.busy) throw conversationBusyError();
+        this.#conversationSessions.set(conversationKey, session);
+        session.adoptPresenter(conversationKey, connector, responder, invocation);
+        const stream = responder.createStream();
+        let started = false;
+        try {
+          await stream.start({ summary: "Compacting context…", actions: [], plan: [] });
+          const finalized = await this.startCompaction(session, {
+            origin: "user",
+            stream,
+            responder,
+            invocation,
+            conversationKey,
+            connector,
+            onStarted: () => {
+              started = true;
+            },
+          });
+          this.#logger.debug("Codex context compaction finalized", {
+            conversationKey,
+            turnId: finalized.turn.id,
+            status: finalized.turn.status,
+          });
+          if (finalized.turn.status === "failed") {
+            this.#logger.warn("Codex context compaction failed", {
+              conversationKey,
+              turnId: finalized.turn.id,
+              error: finalized.turn.error?.message,
+            });
+          }
+        } catch (error) {
+          this.#logger.error("Codex context compaction failed", error, { conversationKey });
+          // Once a turn started, its session owns the stream, including failure.
+          if (!started) await stream.fail(errorMessage(error));
+        }
+        return true;
+      } finally {
+        this.#lastForegroundAt.set(conversationKey, this.#now());
+        this.leaveJob();
+      }
+    } finally {
+      lease.release();
+    }
   }
 
   public async activateConversationThread(
@@ -836,6 +960,15 @@ export class CodexService {
       case "item/tool/call":
         await this.handleDynamicToolCall(request.params, request.id);
         break;
+      case "account/chatgptAuthTokens/refresh": {
+        const provider = this.#externalAuthTokens;
+        if (provider === undefined) {
+          await this.#rpc.replyError(request.id, -32_601, "External ChatGPT auth is unavailable");
+          break;
+        }
+        await this.#rpc.reply(request.id, await provider(request.params));
+        break;
+      }
       default:
         await this.#rpc.replyError(request.id, -32_601, `Unsupported request: ${request.method}`);
     }
@@ -922,6 +1055,13 @@ export class CodexService {
       session.endServerRequest(requestId);
     }
   }
+}
+
+function conversationBusyError(): BridgeError {
+  return new BridgeError(
+    "The conversation is busy. Stop or wait for the current turn first.",
+    "CONVERSATION_BUSY",
+  );
 }
 
 function notificationThreadId(notification: ServerNotification): string | undefined {

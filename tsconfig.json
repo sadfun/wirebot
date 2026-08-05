@@ -23,6 +23,6 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts", "scripts/**/*.d.ts"],
   "exclude": ["dist", "node_modules", ".wirebot"]
 }

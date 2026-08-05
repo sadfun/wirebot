@@ -103,9 +103,18 @@ export async function ensureCurlImpersonate(
   try {
     const archivePath = join(versionDirectory, asset.name);
     await writeFile(archivePath, payload);
-    await runCommand("tar", ["-xzf", asset.name, "curl-impersonate"], {
-      cwd: versionDirectory,
-    });
+    await runCommand(
+      "tar",
+      [
+        "-xzf",
+        asset.name,
+        ...(target.platform === "linux" ? ["--no-same-owner"] : []),
+        "curl-impersonate",
+      ],
+      {
+        cwd: versionDirectory,
+      },
+    );
     await rm(archivePath, { force: true });
     await chmod(binaryPath, 0o755);
     await access(binaryPath);

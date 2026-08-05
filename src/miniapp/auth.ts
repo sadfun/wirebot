@@ -16,6 +16,10 @@ export interface TelegramInitDataOptions {
   readonly now?: Date;
 }
 
+export interface TelegramInitDataUser {
+  readonly id: number;
+}
+
 const HASH_LENGTH = 32;
 const DEFAULT_MAX_AGE_SECONDS = 60 * 60;
 const MAX_CLOCK_SKEW_SECONDS = 30;
@@ -25,7 +29,10 @@ const MAX_CLOCK_SKEW_SECONDS = 30;
  * signed for an allowlisted human user. The raw string must be passed as-is
  * by the Mini App, not reconstructed client-side.
  */
-export function validateTelegramInitData(initData: string, options: TelegramInitDataOptions): void {
+export function validateTelegramInitData(
+  initData: string,
+  options: TelegramInitDataOptions,
+): TelegramInitDataUser {
   if (initData.length === 0 || initData.length > 16_384) {
     throw new BridgeError("Invalid Telegram initialization data", "MINIAPP_UNAUTHORIZED");
   }
@@ -91,6 +98,7 @@ export function validateTelegramInitData(initData: string, options: TelegramInit
   if (user.is_bot === true || !options.allowedUserIds.has(user.id)) {
     throw new BridgeError("This Telegram user is not allowed", "MINIAPP_FORBIDDEN");
   }
+  return { id: user.id };
 }
 
 function parseUnixTimestamp(value: string | null): number {

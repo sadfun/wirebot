@@ -18,10 +18,12 @@ const responseSchema = z
   })
   .loose();
 
-interface ChatGptCredentials {
+export interface ChatGptCredentials {
   readonly accessToken: string;
   readonly accountId: string;
 }
+
+export type ChatGptCredentialsProvider = () => Promise<ChatGptCredentials>;
 
 export interface VoiceTranscriber {
   transcribe(path: string): Promise<string>;
@@ -32,16 +34,19 @@ export class ChatGptVoiceTranscriber implements VoiceTranscriber {
   readonly #authPath: string;
   readonly #transport: TranscriptionTransport;
   readonly #refreshCredentials: () => Promise<void>;
+  readonly #credentialsProvider: ChatGptCredentialsProvider | undefined;
   #refreshPromise: Promise<void> | undefined;
 
   public constructor(
     codexHome: string,
     transport: TranscriptionTransport,
     refreshCredentials: () => Promise<void>,
+    credentialsProvider?: ChatGptCredentialsProvider,
   ) {
     this.#authPath = join(codexHome, "auth.json");
     this.#transport = transport;
     this.#refreshCredentials = refreshCredentials;
+    this.#credentialsProvider = credentialsProvider;
   }
 
   public async transcribe(path: string): Promise<string> {
@@ -82,6 +87,7 @@ export class ChatGptVoiceTranscriber implements VoiceTranscriber {
   }
 
   private async readCredentials(): Promise<ChatGptCredentials> {
+    if (this.#credentialsProvider !== undefined) return await this.#credentialsProvider();
     let auth: z.infer<typeof authSchema>;
     try {
       auth = authSchema.parse(JSON.parse(await readFile(this.#authPath, "utf8")));

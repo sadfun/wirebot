@@ -35,6 +35,11 @@ export const botCommands: readonly {
     help: "return to the previous Codex task",
   },
   { command: "stop", menuDescription: "Stop the running turn", help: "stop the current turn" },
+  {
+    command: "compact",
+    menuDescription: "Compact Codex context",
+    help: "summarize earlier context and free space",
+  },
   { command: "schedules", menuDescription: "List scheduled runs", help: "list scheduled runs" },
   {
     command: "status",
@@ -190,6 +195,23 @@ export class CodexBridge {
         await message.responder.sendText(
           stopped ? "Stopping the current turn." : "Nothing is running.",
         );
+        return;
+      }
+      case "compact": {
+        const compacted = await this.#codex.compactConversation(
+          message.address.key,
+          message.address.channel,
+          message.responder,
+          {
+            owner: messageOwner(message),
+            ...(message.address.deliveryTarget === undefined
+              ? {}
+              : { deliveryTarget: message.address.deliveryTarget }),
+          },
+        );
+        if (!compacted) {
+          await message.responder.sendText("There is no Codex task to compact.");
+        }
         return;
       }
       case "status":

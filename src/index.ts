@@ -192,6 +192,7 @@ export async function runWirebot(): Promise<void> {
       workspace: config.workspace,
       logger: logger.child({ component: "scheduled-runs" }),
     });
+    miniApp.setScheduledRuns(scheduledRuns);
     const bridge = new CodexBridge(
       codex,
       publicUrl,
