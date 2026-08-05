@@ -38,4 +38,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: false
+          load: true
+          tags: wirebot:ci
+      - name: Image smoke test
+        run: docker run --rm wirebot:ci version
