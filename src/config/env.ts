@@ -1,20 +1,8 @@
 import { resolve } from "node:path";
 import { z } from "zod";
 import type { LogLevel } from "../shared/logger.js";
-import type { UpdateMode } from "../update/monitor.js";
-
-const updateEnvSchema = z.object({
-  TELEX_UPDATE_MODE: z.enum(["off", "notify", "auto"]).default("notify"),
-  TELEX_UPDATE_INTERVAL_HOURS: z.coerce.number().min(1).max(168).default(6),
-  TELEX_UPDATE_REPOSITORY: z
-    .string()
-    .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)
-    .default("sadfun/telex"),
-  TELEX_INSTALL_DIR: z.string().min(1).optional(),
-});
 
 const envSchema = z.object({
-  ...updateEnvSchema.shape,
   TELEGRAM_BOT_TOKEN: z.string().min(20),
   TELEGRAM_ALLOWED_USER_IDS: z.string().min(1),
   TELEGRAM_API_BASE: z.url().default("https://api.telegram.org"),
@@ -40,20 +28,9 @@ interface AppConfig {
   readonly tunnelMode: "auto" | "off";
   readonly dataDirectory: string;
   readonly workspace: string;
-  readonly updateMode: UpdateMode;
-  readonly updateIntervalMs: number;
-  readonly updateRepository: string;
-  readonly installDirectory: string | undefined;
   readonly host: string;
   readonly port: number;
   readonly logLevel: LogLevel;
-}
-
-interface UpdateConfig {
-  readonly updateMode: UpdateMode;
-  readonly updateIntervalMs: number;
-  readonly updateRepository: string;
-  readonly installDirectory: string | undefined;
 }
 
 export function loadAppConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -65,7 +42,6 @@ export function loadAppConfig(environment: NodeJS.ProcessEnv = process.env): App
   );
 
   return {
-    ...updateConfigFromParsed(parsed),
     telegramToken: parsed.TELEGRAM_BOT_TOKEN,
     allowedUserIds,
     telegramApiBase: parsed.TELEGRAM_API_BASE.replace(/\/$/, ""),
@@ -77,19 +53,5 @@ export function loadAppConfig(environment: NodeJS.ProcessEnv = process.env): App
     host: parsed.HOST,
     port: parsed.PORT,
     logLevel: parsed.LOG_LEVEL,
-  };
-}
-
-export function loadUpdateConfig(environment: NodeJS.ProcessEnv = process.env): UpdateConfig {
-  return updateConfigFromParsed(updateEnvSchema.parse(environment));
-}
-
-function updateConfigFromParsed(parsed: z.infer<typeof updateEnvSchema>): UpdateConfig {
-  return {
-    updateMode: parsed.TELEX_UPDATE_MODE,
-    updateIntervalMs: parsed.TELEX_UPDATE_INTERVAL_HOURS * 60 * 60 * 1_000,
-    updateRepository: parsed.TELEX_UPDATE_REPOSITORY,
-    installDirectory:
-      parsed.TELEX_INSTALL_DIR === undefined ? undefined : resolve(parsed.TELEX_INSTALL_DIR),
   };
 }

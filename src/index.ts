@@ -23,8 +23,6 @@ import { Logger } from "./shared/logger.js";
 import { readTelexVersion } from "./shared/version.js";
 import { ChatGptVoiceTranscriber } from "./transcription/service.js";
 import { CurlImpersonateTransport } from "./transcription/transport.js";
-import { monitorUpdates } from "./update/monitor.js";
-import { ReleaseUpdater } from "./update/release.js";
 
 const defaultConfig = `# Managed by Telex. You can edit this file or use the Telegram Mini App.
 approval_policy = "on-request"
@@ -38,16 +36,10 @@ interface Stoppable {
   stop(): Promise<void>;
 }
 
-interface TelexRunResult {
-  readonly reason: "shutdown" | "updated";
-  readonly version?: string;
-}
-
-export async function runTelex(): Promise<TelexRunResult> {
+export async function runTelex(): Promise<void> {
   const config = loadAppConfig();
   const logger = new Logger(config.logLevel, { service: "telex" });
   const shutdown = shutdownSignal(logger);
-  const updateAbort = new AbortController();
   const projectRoot = fileURLToPath(new URL("../", import.meta.url));
   const bridgeVersion = await readTelexVersion(projectRoot);
   const codexHome = join(config.dataDirectory, "codex-home");
@@ -57,8 +49,6 @@ export async function runTelex(): Promise<TelexRunResult> {
   const settingsPath = join(config.dataDirectory, "settings.json");
   const automationsPath = join(config.dataDirectory, "automations.json");
   const resources: Stoppable[] = [];
-  const manuallyInstalledUpdate = deferred<string>();
-  let updateMonitor: Promise<string | undefined> | undefined;
 
   try {
     await Promise.all([
@@ -179,14 +169,6 @@ export async function runTelex(): Promise<TelexRunResult> {
       }
     }
 
-    const updater = new ReleaseUpdater({
-      repository: config.updateRepository,
-      currentVersion: bridgeVersion,
-      ...(config.installDirectory === undefined
-        ? {}
-        : { installDirectory: config.installDirectory }),
-      logger: logger.child({ component: "updater" }),
-    });
     const telegram = new TelegramChannel(
       config.telegramToken,
       config.telegramApiBase,
@@ -207,22 +189,6 @@ export async function runTelex(): Promise<TelexRunResult> {
       codex,
       publicUrl,
       logger.child({ component: "bridge" }),
-      {
-        canInstall: config.installDirectory !== undefined,
-        run: async () => {
-          const status = await updater.check("latest", updateAbort.signal);
-          if (!status.updateAvailable) {
-            return { status: "current", version: status.currentVersion };
-          }
-          const installed = await updater.install(status.release, updateAbort.signal);
-          return {
-            status: "installed",
-            previousVersion: installed.previousVersion,
-            version: installed.version,
-          };
-        },
-        onInstalled: manuallyInstalledUpdate.resolve,
-      },
       runtime,
       scheduledRuns,
     );
@@ -238,36 +204,12 @@ export async function runTelex(): Promise<TelexRunResult> {
       miniApp: `${config.host}:${config.port}`,
     });
 
-    if (config.updateMode !== "off") {
-      updateMonitor = monitorUpdates({
-        updater,
-        mode: config.updateMode,
-        intervalMs: config.updateIntervalMs,
-        canInstall: config.installDirectory !== undefined,
-        logger: logger.child({ component: "updater" }),
-        signal: updateAbort.signal,
-      });
-    }
-    const updateSources = [manuallyInstalledUpdate.promise];
-    if (updateMonitor !== undefined) {
-      // The monitor resolves undefined when it stops without installing; only real installs may win.
-      updateSources.push(updateMonitor.then((version) => version ?? pending<string>()));
-    }
-    const completed = await Promise.race([
-      shutdown.promise.then(() => ({ reason: "shutdown" }) as const),
-      Promise.race(updateSources).then((version) => ({ reason: "updated", version }) as const),
-    ]);
-    if (completed.reason === "updated") {
-      logger.info("Restarting to run the installed Telex release", { version: completed.version });
-    }
-    return completed;
+    await shutdown.promise;
   } catch (error) {
     logger.error("Telex failed", error);
     throw error;
   } finally {
     shutdown.dispose();
-    updateAbort.abort();
-    await updateMonitor;
     await stopAll(resources, logger);
   }
 }
@@ -313,10 +255,6 @@ function shutdownSignal(logger: Logger): {
   process.once("SIGINT", handle);
   process.once("SIGTERM", handle);
   return { promise: shutdown.promise, dispose };
-}
-
-function pending<T>(): Promise<T> {
-  return new Promise<T>(() => undefined);
 }
 
 async function stopAll(resources: readonly Stoppable[], logger: Logger): Promise<void> {

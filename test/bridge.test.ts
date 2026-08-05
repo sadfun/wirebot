@@ -2,12 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ScheduledRunsEngine } from "../src/automations/engine.js";
 import type { CodexRuntimeStatus } from "../src/codex/runtime-service.js";
 import type { CodexService } from "../src/codex/service.js";
-import {
-  CodexBridge,
-  type CodexRuntimeCommand,
-  type TelexUpdateCommand,
-  type TelexUpdateResult,
-} from "../src/core/bridge.js";
+import { CodexBridge, type CodexRuntimeCommand } from "../src/core/bridge.js";
 import type {
   InboundAttachment,
   InboundCommand,
@@ -99,10 +94,6 @@ const readyRuntimeStatus: CodexRuntimeStatus = {
   configPath: null,
 };
 
-function stubUpdate(): TelexUpdateCommand {
-  return { canInstall: false, run: vi.fn(), onInstalled: vi.fn() };
-}
-
 function stubRuntime(status: Partial<CodexRuntimeStatus> = {}): CodexRuntimeCommand {
   return {
     status: () => ({ ...readyRuntimeStatus, ...status }),
@@ -124,7 +115,6 @@ function createBridge(
   codex: CodexService,
   overrides: {
     publicUrl?: string;
-    update?: TelexUpdateCommand;
     runtime?: CodexRuntimeCommand;
     scheduledRuns?: ScheduledRunsEngine;
   } = {},
@@ -133,7 +123,6 @@ function createBridge(
     codex,
     overrides.publicUrl,
     logger,
-    overrides.update ?? stubUpdate(),
     overrides.runtime ?? stubRuntime(),
     overrides.scheduledRuns ?? stubScheduledRuns(),
   );
@@ -328,71 +317,6 @@ describe("CodexBridge onboarding", () => {
     const text = responder.sendText.mock.calls[0]?.[0];
     expect(text).toContain("already signed in to ChatGPT (plus)");
     expect(text).toContain("/logout");
-  });
-});
-
-describe("CodexBridge updates", () => {
-  it("reports when Telex is already current", async () => {
-    const { codex } = createCodex();
-    const updateCommand: TelexUpdateCommand = {
-      canInstall: true,
-      run: vi.fn(async (): Promise<TelexUpdateResult> => ({ status: "current", version: "1.2.3" })),
-      onInstalled: vi.fn(),
-    };
-    const bridge = createBridge(codex, { update: updateCommand });
-    const responder = createResponder();
-
-    await bridge.handleMessage(createMessage("/update", responder, {}, [], command("update")));
-
-    expect(updateCommand.run).toHaveBeenCalledTimes(1);
-    expect(responder.sendText.mock.calls[0]?.[0]).toContain("Checking");
-    expect(responder.sendText.mock.calls[1]?.[0]).toContain("1.2.3 is already current");
-    expect(updateCommand.onInstalled).not.toHaveBeenCalled();
-  });
-
-  it("installs the latest release and requests a restart after the handler returns", async () => {
-    const { codex } = createCodex();
-    let handlerReturned = false;
-    const updateCommand: TelexUpdateCommand = {
-      canInstall: true,
-      run: vi.fn(
-        async (): Promise<TelexUpdateResult> => ({
-          status: "installed",
-          previousVersion: "1.2.3",
-          version: "1.3.0",
-        }),
-      ),
-      onInstalled: vi.fn(() => {
-        expect(handlerReturned).toBe(true);
-      }),
-    };
-    const bridge = createBridge(codex, { update: updateCommand });
-    const responder = createResponder();
-
-    await bridge.handleMessage(createMessage("/update", responder, {}, [], command("update")));
-    handlerReturned = true;
-
-    expect(responder.sendText.mock.calls[1]?.[0]).toContain("Installed Telex 1.3.0");
-    expect(responder.sendText.mock.calls[1]?.[0]).toContain("Restarting");
-    expect(updateCommand.onInstalled).not.toHaveBeenCalled();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(updateCommand.onInstalled).toHaveBeenCalledWith("1.3.0");
-  });
-
-  it("explains that source checkouts must be updated with Git", async () => {
-    const { codex } = createCodex();
-    const updateCommand: TelexUpdateCommand = {
-      canInstall: false,
-      run: vi.fn(),
-      onInstalled: vi.fn(),
-    };
-    const bridge = createBridge(codex, { update: updateCommand });
-    const responder = createResponder();
-
-    await bridge.handleMessage(createMessage("/update", responder, {}, [], command("update")));
-
-    expect(updateCommand.run).not.toHaveBeenCalled();
-    expect(responder.sendText.mock.calls[0]?.[0]).toContain("source checkout");
   });
 });
 

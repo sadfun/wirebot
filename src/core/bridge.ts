@@ -54,11 +54,6 @@ export const botCommands: readonly {
     menuDescription: "Restart the Codex app-server",
     help: "safely restart the Codex app-server",
   },
-  {
-    command: "update",
-    menuDescription: "Update Telex",
-    help: "update Telex to the latest release",
-  },
   { command: "help", menuDescription: "Show commands", help: "show this help" },
 ];
 
@@ -72,20 +67,6 @@ const readyText =
   'Try something like "explain what this project does", or send /help for all commands.';
 
 const loginCodeTtl = 15 * 60 * 1_000;
-
-export type TelexUpdateResult =
-  | { readonly status: "current"; readonly version: string }
-  | {
-      readonly status: "installed";
-      readonly previousVersion: string;
-      readonly version: string;
-    };
-
-export interface TelexUpdateCommand {
-  readonly canInstall: boolean;
-  readonly run: () => Promise<TelexUpdateResult>;
-  readonly onInstalled: (version: string) => void;
-}
 
 export interface CodexRuntimeCommand {
   status(): CodexRuntimeStatus;
@@ -104,12 +85,10 @@ export class CodexBridge {
   readonly #codex: CodexService;
   readonly #publicUrl: string | undefined;
   readonly #logger: Logger;
-  readonly #updateCommand: TelexUpdateCommand;
   readonly #runtimeCommand: CodexRuntimeCommand;
   readonly #scheduledRuns: ScheduledRunsEngine;
   readonly #pendingLogins = new Map<string, PendingLogin>();
   #signedInConfirmed = false;
-  #updateInProgress = false;
 
   public readonly handleMessage: MessageHandler = async (message) => {
     try {
@@ -134,14 +113,12 @@ export class CodexBridge {
     codex: CodexService,
     publicUrl: string | undefined,
     logger: Logger,
-    updateCommand: TelexUpdateCommand,
     runtimeCommand: CodexRuntimeCommand,
     scheduledRuns: ScheduledRunsEngine,
   ) {
     this.#codex = codex;
     this.#publicUrl = publicUrl;
     this.#logger = logger;
-    this.#updateCommand = updateCommand;
     this.#runtimeCommand = runtimeCommand;
     this.#scheduledRuns = scheduledRuns;
     codex.onLoginCompleted((notification) => {
@@ -268,9 +245,6 @@ export class CodexBridge {
         if (!(await this.requirePrivateChat(message))) return;
         await this.handleRuntimeCommand(message, "restart");
         return;
-      case "update":
-        await this.handleUpdate(message);
-        return;
       default:
         await message.responder.sendText(`Unknown command /${command.name}.\n\n${helpText}`);
     }
@@ -336,45 +310,6 @@ export class CodexBridge {
           ? `Restart needs attention: ${status.detail}`
           : "✅ Codex restarted and is ready.",
     );
-  }
-
-  private async handleUpdate(message: InboundMessage): Promise<void> {
-    const updateCommand = this.#updateCommand;
-    if (!updateCommand.canInstall) {
-      await message.responder.sendText(
-        "In-app updates require an installer-managed Telex release. This is a source checkout; update it with Git instead.",
-      );
-      return;
-    }
-    if (this.#updateInProgress) {
-      await message.responder.sendText("A Telex update is already in progress.");
-      return;
-    }
-
-    this.#updateInProgress = true;
-    try {
-      await message.responder.sendText("Checking for the latest Telex release…");
-      const result = await updateCommand.run();
-      if (result.status === "current") {
-        await message.responder.sendText(`Telex ${result.version} is already current.`);
-        return;
-      }
-      try {
-        await message.responder.sendText(
-          `✅ Installed Telex ${result.version} (previously ${result.previousVersion}). Restarting now…`,
-        );
-      } finally {
-        // Let the Telegram runner finish this middleware before shutdown waits
-        // for all in-flight middleware. Resolving inline would make runner.stop()
-        // wait for the /update handler that initiated the shutdown.
-        setImmediate(() => updateCommand.onInstalled(result.version));
-      }
-    } catch (error) {
-      this.#logger.warn("Manual Telex update failed", { error: errorMessage(error) });
-      await message.responder.sendText(`Could not update Telex: ${errorMessage(error)}`);
-    } finally {
-      this.#updateInProgress = false;
-    }
   }
 
   private async handleStart(message: InboundMessage): Promise<void> {
