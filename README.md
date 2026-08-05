@@ -1,10 +1,26 @@
-# Wirebot
+# 🤖 Wirebot
 
-Wirebot is a self-hosted Telegram bridge for OpenAI Codex that gives the agent a whole machine. Telegram is only the transport: a dedicated [Codex app-server](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md) owns threads, turns, tools, approvals, authentication, and configuration. Wirebot ships as an Ubuntu-based container image with a rich toolset preinstalled, so Codex can install packages, build software, and manage its environment like a normal Linux box — while your data survives every update in a single mounted volume.
+Wirebot brings Codex to your messenger: a full Codex agent you talk to from Telegram, built on a transport layer designed so Slack, Discord, and others can follow.
 
-Wirebot supports private conversations, scheduled runs, automatic Telegram voice-message transcription, photos and files in both directions, forwarded and replied-to context, polls and other structured messages, streamed replies and thinking, interactive approvals, guest mentions, persistent Codex threads, and an authenticated settings Mini App. Each release pins and bundles the exact compatible Codex CLI, so nothing depends on a global Codex installation.
+Think of it as OpenClaw or Hermes Agent with a different philosophy:
 
-## Run with Docker
+* **Built specifically for Codex.** Wirebot runs on Codex's official app server, which makes it exceptionally stable and gives it native support for every Codex feature.
+* **No custom harness.** Turns, skills, and tool calls are handled by Codex itself — OpenAI's harness is already very good, so instead of reinventing the wheel, Wirebot focuses on being a better **transport**.
+* **No vendor lock-in.** Codex is an open-source harness, and you can proxy any model you want through it.
+
+Out of the box:
+
+* **Rich Telegram I/O** — photos and files in both directions, voice messages with automatic transcription, forwarded and replied-to context, polls and other structured messages.
+* **A real agent experience** — streamed replies and thinking, interactive approvals, persistent Codex threads, private conversations, and guest mentions.
+* **Scheduled runs** — describe an automation in plain language and Wirebot keeps it running, following Codex Desktop's scheduled-task model.
+* **Settings Mini App** — an authenticated in-Telegram UI for Codex configuration, skills, and schedules.
+* **Pinned Codex CLI** — each release bundles the exact compatible Codex version, so nothing depends on a global installation.
+
+## Deployment
+
+> **Don't want to run a server?** [wirebot.ai](https://wirebot.ai) is the hosted version: set up in about 60 seconds, entirely from the browser, without ever touching a config file.
+
+### Run with Docker
 
 Requirements: Docker (or any OCI runtime), a bot token from [@BotFather](https://t.me/BotFather), and the numeric Telegram user IDs allowed to use the bot.
 
@@ -44,14 +60,14 @@ The container filesystem is the **image**: Ubuntu, the wirebot binary, the pinne
 
 Everything personal lives in the **`/data` volume** and survives every update:
 
-| Path | Contents |
-| --- | --- |
-| `/data/workspace` | The Codex working directory (`CODEX_WORKSPACE`) |
-| `/data/home` | The agent user's home: dotfiles, SSH keys, git config, `~/.local`, caches |
-| `/data/usr-local` | `/usr/local` is a symlink here: `make install`, static binaries, pip/npm prefixes |
-| `/data/linuxbrew` | `/home/linuxbrew` is a symlink here: an optional Homebrew installation |
-| `/data/codex-home` | Codex login, `config.toml`, skills, sessions (`CODEX_HOME`) |
-| `/data/*.json` | Wirebot conversations, settings, and scheduled runs |
+| Path               | Contents                                                                          |
+|--------------------|-----------------------------------------------------------------------------------|
+| `/data/workspace`  | The Codex working directory (`CODEX_WORKSPACE`)                                   |
+| `/data/home`       | The agent user's home: dotfiles, SSH keys, git config, `~/.local`, caches         |
+| `/data/usr-local`  | `/usr/local` is a symlink here: `make install`, static binaries, pip/npm prefixes |
+| `/data/linuxbrew`  | `/home/linuxbrew` is a symlink here: an optional Homebrew installation            |
+| `/data/codex-home` | Codex login, `config.toml`, skills, sessions (`CODEX_HOME`)                       |
+| `/data/*.json`     | Wirebot conversations, settings, and scheduled runs                               |
 
 The agent runs as an unprivileged user with passwordless sudo, so `apt-get install` works — but apt installs land outside `/data` and disappear on the next image update. Codex is told this contract on every turn: one-off needs can use apt, while software worth keeping belongs in `/usr/local`, the home directory, or Homebrew. Popular missing tools are good candidates for the image itself; open an issue.
 
@@ -77,15 +93,15 @@ and reverse-proxy that origin to the container's port 8787 (publish it in your c
 
 ### Configuration reference
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | required | Bot token from @BotFather |
-| `TELEGRAM_ALLOWED_USER_IDS` | required | Comma-separated numeric allowlist |
-| `PUBLIC_URL` | unset | Public HTTPS origin for the Mini App |
-| `WIREBOT_TUNNEL` | `auto` | `off` disables the quick-tunnel fallback |
-| `TELEGRAM_API_BASE` | `https://api.telegram.org` | Alternate Bot API server for large files |
-| `HOST` / `PORT` | `0.0.0.0` / `8787` | Mini App listener (container default) |
-| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
+| Variable                    | Default                    | Purpose                                  |
+|-----------------------------|----------------------------|------------------------------------------|
+| `TELEGRAM_BOT_TOKEN`        | required                   | Bot token from @BotFather                |
+| `TELEGRAM_ALLOWED_USER_IDS` | required                   | Comma-separated numeric allowlist        |
+| `PUBLIC_URL`                | unset                      | Public HTTPS origin for the Mini App     |
+| `WIREBOT_TUNNEL`            | `auto`                     | `off` disables the quick-tunnel fallback |
+| `TELEGRAM_API_BASE`         | `https://api.telegram.org` | Alternate Bot API server for large files |
+| `HOST` / `PORT`             | `0.0.0.0` / `8787`         | Mini App listener (container default)    |
+| `LOG_LEVEL`                 | `info`                     | `debug`, `info`, `warn`, or `error`      |
 
 ## Authenticate Codex
 
@@ -95,21 +111,21 @@ Voice messages use that same ChatGPT subscription. Wirebot briefly shows a **Tra
 
 ## Telegram commands
 
-| Command | Effect |
-| --- | --- |
-| `/start` | Show setup guidance and start sign-in when required. |
-| `/new` | Interrupt the current turn, forget its thread, and start fresh on the next message. |
-| `/back` | Return to the previously active Codex task. |
-| `/stop` | Interrupt the running Codex turn. |
-| `/compact` | Ask Codex to summarize earlier context in the current task; unavailable while a turn is running. |
-| `/schedules` | List your scheduled runs and their next execution times. |
-| `/status` | Check app-server connectivity and the current Codex account. |
-| `/login` | Start Codex's ChatGPT device-code login in a private chat. |
-| `/logout` | Sign out through Codex in a private chat. |
-| `/config` | Open the authenticated settings Mini App in a private chat. |
-| `/reload` | Reload config, MCP servers, and skills through Codex's native app-server APIs. |
-| `/restart` | Drain active work and safely restart only the Codex app-server. |
-| `/help` | Show the command list. |
+| Command      | Effect                                                                                           |
+|--------------|--------------------------------------------------------------------------------------------------|
+| `/start`     | Show setup guidance and start sign-in when required.                                             |
+| `/new`       | Interrupt the current turn, forget its thread, and start fresh on the next message.              |
+| `/back`      | Return to the previously active Codex task.                                                      |
+| `/stop`      | Interrupt the running Codex turn.                                                                |
+| `/compact`   | Ask Codex to summarize earlier context in the current task; unavailable while a turn is running. |
+| `/schedules` | List your scheduled runs and their next execution times.                                         |
+| `/status`    | Check app-server connectivity and the current Codex account.                                     |
+| `/login`     | Start Codex's ChatGPT device-code login in a private chat.                                       |
+| `/logout`    | Sign out through Codex in a private chat.                                                        |
+| `/config`    | Open the authenticated settings Mini App in a private chat.                                      |
+| `/reload`    | Reload config, MCP servers, and skills through Codex's native app-server APIs.                   |
+| `/restart`   | Drain active work and safely restart only the Codex app-server.                                  |
+| `/help`      | Show the command list.                                                                           |
 
 Messages that are not commands become `turn/start` requests. Telegram voice messages are transcribed before the turn starts, while their original OGG files remain available to Codex. Photos and supported image files use Codex's native image input. Videos, other audio, documents, animated stickers, and other binary files are downloaded under `.wirebot/attachments` in the Codex workspace and passed as local paths; captions, replies, forwards, polls, contacts, locations, checklists, and Telegram-only structures are preserved as concise text context. Codex commentary drives Telegram's thinking indicator, final-answer deltas drive the draft, approval or user-input requests become inline choices, and native automatic or manual context compaction is shown in the same progress stream.
 
