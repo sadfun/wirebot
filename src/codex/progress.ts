@@ -3,6 +3,7 @@ import type { ProgressAction } from "../core/channel.js";
 import type { FileUpdateChange } from "../generated/codex/v2/FileUpdateChange.js";
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem.js";
 import type { Turn } from "../generated/codex/v2/Turn.js";
+import { capitalize, compactTruncate } from "../shared/text.js";
 
 /** Final assistant text of a turn, preferring explicit final-answer messages. */
 export function finalTextFromTurn(turn: Turn): string {
@@ -99,7 +100,7 @@ function commandActionLabel(item: Extract<ThreadItem, { type: "commandExecution"
       label = `${completed ? "Searched" : "Searching"} ${action.query ?? "files"}`;
       break;
     default:
-      label = `${completed ? "Ran" : "Running"}      ${compactCommand(item.command)}`;
+      label = `${completed ? "Ran" : "Running"}      ${compactTruncate(item.command, 120)}`;
   }
   return `${label}${durationSuffix(item.durationMs)}`;
 }
@@ -124,11 +125,6 @@ function formatDuration(durationMs: number): string {
   return `${Math.round(durationMs / 60_000)}m`;
 }
 
-function compactCommand(command: string): string {
-  const compact = command.replaceAll(/\s+/g, " ").trim();
-  return compact.length <= 120 ? compact : `${compact.slice(0, 119).trimEnd()}…`;
-}
-
 function collaborationLabel(
   tool: Extract<ThreadItem, { type: "collabAgentToolCall" }>["tool"],
 ): string {
@@ -144,8 +140,4 @@ function collaborationLabel(
     case "closeAgent":
       return "close agent";
   }
-}
-
-function capitalize(value: string): string {
-  return value.length === 0 ? value : `${value[0]?.toUpperCase()}${value.slice(1)}`;
 }

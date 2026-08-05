@@ -1,16 +1,18 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
-import { once } from "node:events";
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
-import { delay, withTimeout } from "../shared/async.js";
+import { withTimeout } from "../shared/async.js";
 import { externalProcessEnvironment } from "../shared/environment.js";
 import { BridgeError, errorMessage } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
+import { terminateChild } from "../shared/process.js";
 
 const urlPattern = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/u;
 const startTimeoutMs = 30_000;
+/** Resolved from PATH; the container image bakes the pinned build into a PATH directory. */
+const cloudflaredBinary = "cloudflared";
 
-export function extractTryCloudflareUrl(line: string): string | undefined {
+function extractTryCloudflareUrl(line: string): string | undefined {
   return urlPattern.exec(line)?.[0];
 }
 
@@ -18,7 +20,6 @@ export interface QuickTunnelOptions {
   readonly host: string;
   readonly port: number;
   readonly logger: Logger;
-  readonly binary?: string;
 }
 
 /**
@@ -42,7 +43,7 @@ export class QuickTunnel {
 
     const origin = `http://${this.#options.host === "0.0.0.0" ? "127.0.0.1" : this.#options.host}:${this.#options.port}`;
     const child = spawn(
-      this.#options.binary ?? "cloudflared",
+      cloudflaredBinary,
       ["tunnel", "--protocol", "http2", "--no-autoupdate", "--url", origin],
       {
         env: externalProcessEnvironment(),
@@ -111,14 +112,6 @@ export class QuickTunnel {
     if (child === undefined) return;
     this.#stopping = true;
     this.#child = undefined;
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGTERM");
-      await Promise.race([
-        once(child, "exit").then(() => undefined),
-        delay(5_000).then(() => {
-          child.kill("SIGKILL");
-        }),
-      ]);
-    }
+    await terminateChild(child);
   }
 }

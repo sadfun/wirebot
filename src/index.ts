@@ -1,4 +1,3 @@
-import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ScheduledRunsEngine } from "./automations/engine.js";
 import { AutomationStore } from "./automations/store.js";
@@ -12,12 +11,11 @@ import { loadAppConfig } from "./config/env.js";
 import { CodexBridge } from "./core/bridge.js";
 import { ConversationStore } from "./core/conversation-store.js";
 import { WirebotSettingsStore } from "./core/settings-store.js";
-import { ensureCloudflared } from "./miniapp/cloudflared.js";
 import { MiniAppServer } from "./miniapp/server.js";
 import { QuickTunnel } from "./miniapp/tunnel.js";
 import { deferred } from "./shared/async.js";
 import { errorMessage } from "./shared/errors.js";
-import { atomicWriteFile, ensureDirectory } from "./shared/fs.js";
+import { atomicWriteFile, ensureDirectory, readFileIfExists } from "./shared/fs.js";
 import { Logger } from "./shared/logger.js";
 import { wirebotVersion } from "./shared/version.js";
 import { ChatGptVoiceTranscriber } from "./transcription/service.js";
@@ -94,19 +92,17 @@ export async function runWirebot(): Promise<void> {
       logger.child({ component: "automation-store" }),
     );
     await Promise.all([conversations.load(), settings.load(), automations.load()]);
-    const transcriptionTransport = new CurlImpersonateTransport(
-      toolchainsDirectory,
-      logger.child({ component: "transcription-transport" }),
-    );
+    const chatgptAuth = config.codexChatgptAuth;
     const voiceTranscriber = new ChatGptVoiceTranscriber(
       codexHome,
-      transcriptionTransport,
+      new CurlImpersonateTransport(),
       async () => {
         await rpc.request<unknown>({
           method: "account/read",
           params: { refreshToken: true },
         });
       },
+      chatgptAuth === undefined ? undefined : () => Promise.resolve(chatgptAuth),
     );
     let liveRuntime: CodexRuntimeService | undefined;
     const codex = new CodexService(
@@ -122,8 +118,30 @@ export async function runWirebot(): Promise<void> {
         effectiveSettings: () => liveRuntime?.settings() ?? {},
         explicitSkillInputs: (text) => liveRuntime?.skillInputs(text) ?? [],
         ...(config.container ? { environmentContext: createContainerEnvironmentContext() } : {}),
+        ...(chatgptAuth === undefined
+          ? {}
+          : {
+              externalAuthTokens: (request) => {
+                logger.warn(
+                  "Codex asked to refresh the static CODEX_CHATGPT_TOKEN; returning it unchanged — replace the token and restart if authentication keeps failing",
+                  { reason: request.reason },
+                );
+                return Promise.resolve({
+                  accessToken: chatgptAuth.accessToken,
+                  chatgptAccountId: chatgptAuth.accountId,
+                  chatgptPlanType: null,
+                });
+              },
+            }),
       },
     );
+    if (chatgptAuth !== undefined) {
+      await codex.loginWithChatgptTokens(chatgptAuth.accessToken, chatgptAuth.accountId);
+      logger.info("Codex is authenticated with the ChatGPT token from CODEX_CHATGPT_TOKEN");
+    } else if (config.codexApiKey !== undefined) {
+      await codex.loginWithApiKey(config.codexApiKey);
+      logger.info("Codex is authenticated with the API key from CODEX_API_KEY");
+    }
     const configService = new CodexConfigService(rpc, config.workspace);
     const runtime = new CodexRuntimeService({
       rpc,
@@ -153,14 +171,9 @@ export async function runWirebot(): Promise<void> {
     let publicUrl = config.publicUrl;
     if (publicUrl === undefined && config.tunnelMode === "auto") {
       try {
-        const binary = await ensureCloudflared(
-          toolchainsDirectory,
-          logger.child({ component: "tunnel" }),
-        );
         const tunnel = new QuickTunnel({
           host: config.host,
           port: config.port,
-          binary,
           logger: logger.child({ component: "tunnel" }),
         });
         publicUrl = await tunnel.start();
@@ -170,7 +183,7 @@ export async function runWirebot(): Promise<void> {
         });
       } catch (error) {
         logger.warn(
-          "The quick tunnel failed to start and no PUBLIC_URL is set; the settings Mini App is disabled. Set PUBLIC_URL, or check outbound network access to Cloudflare.",
+          "The quick tunnel failed to start and no PUBLIC_URL is set; the settings Mini App is disabled. Set PUBLIC_URL, install cloudflared, or check outbound network access to Cloudflare.",
           { error: errorMessage(error) },
         );
       }
@@ -223,26 +236,24 @@ export async function runWirebot(): Promise<void> {
 }
 
 async function ensureDefaultCodexConfig(path: string, container: boolean): Promise<void> {
-  try {
-    await access(path);
-    const contents = await readFile(path, "utf8");
-    const hasCredentialStore = /^\s*cli_auth_credentials_store\s*=/mu.test(contents);
-    const withoutProjectRootMarkers = contents.replace(
-      /^\s*project_root_markers\s*=.*(?:\r?\n|$)/gmu,
-      "",
-    );
-    const firstTable = withoutProjectRootMarkers.search(/^\s*\[/mu);
-    const root =
-      firstTable < 0 ? withoutProjectRootMarkers : withoutProjectRootMarkers.slice(0, firstTable);
-    const tables = firstTable < 0 ? "" : withoutProjectRootMarkers.slice(firstTable);
-    const credentialStore = hasCredentialStore ? "" : '\ncli_auth_credentials_store = "file"';
-    const isolated = `${root.trimEnd()}${credentialStore}\nproject_root_markers = []\n${tables.length === 0 ? "" : `\n${tables.trimStart()}`}`;
-    if (isolated !== contents) {
-      await atomicWriteFile(path, isolated);
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  const contents = await readFileIfExists(path);
+  if (contents === undefined) {
     await atomicWriteFile(path, defaultCodexConfig(container));
+    return;
+  }
+  const hasCredentialStore = /^\s*cli_auth_credentials_store\s*=/mu.test(contents);
+  const withoutProjectRootMarkers = contents.replace(
+    /^\s*project_root_markers\s*=.*(?:\r?\n|$)/gmu,
+    "",
+  );
+  const firstTable = withoutProjectRootMarkers.search(/^\s*\[/mu);
+  const root =
+    firstTable < 0 ? withoutProjectRootMarkers : withoutProjectRootMarkers.slice(0, firstTable);
+  const tables = firstTable < 0 ? "" : withoutProjectRootMarkers.slice(firstTable);
+  const credentialStore = hasCredentialStore ? "" : '\ncli_auth_credentials_store = "file"';
+  const isolated = `${root.trimEnd()}${credentialStore}\nproject_root_markers = []\n${tables.length === 0 ? "" : `\n${tables.trimStart()}`}`;
+  if (isolated !== contents) {
+    await atomicWriteFile(path, isolated);
   }
 }
 

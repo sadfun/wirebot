@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { unavailableAttachmentsWarning } from "../codex/output-files.js";
 import type { ApplicationContext } from "../codex/rpc.js";
 import type {
   CodexDynamicTool,
@@ -18,6 +19,7 @@ import {
 } from "../core/channel.js";
 import type { JsonValue } from "../generated/codex/serde_json/JsonValue.js";
 import { errorMessage } from "../shared/errors.js";
+import { ensureDirectory } from "../shared/fs.js";
 import type { Logger } from "../shared/logger.js";
 import { nextOccurrence } from "./recurrence.js";
 import type { AutomationStore } from "./store.js";
@@ -273,11 +275,13 @@ export class ScheduledRunsEngine {
     input: unknown,
   ): Promise<Readonly<{ created: boolean; schedule: ManagedSchedule }>> {
     const { idempotency_key: idempotencyKey, ...values } = miniAppCreateScheduleSchema.parse(input);
-    const operation = createOperationSchema.parse({
+    // The Mini App schema is derived from the operation schema, so `values` is
+    // already validated; only the fixed discriminants are added here.
+    const operation: z.infer<typeof createOperationSchema> = {
       mode: "create",
       kind: "cron",
       ...values,
-    });
+    };
     const id = stableAutomationId("miniapp", owner.provider, owner.id, idempotencyKey);
     const result = await this.createAutomation(operation, {
       id,
@@ -297,7 +301,9 @@ export class ScheduledRunsEngine {
   ): Promise<ManagedSchedule> {
     const { expected_revision: expectedRevision, ...changes } =
       miniAppUpdateScheduleSchema.parse(input);
-    const operation = updateOperationSchema.parse({ mode: "update", id, ...changes });
+    // `changes` comes pre-validated through the derived Mini App schema; `id`
+    // is validated by the route handler.
+    const operation: z.infer<typeof updateOperationSchema> = { mode: "update", id, ...changes };
     const updated = await this.updateAutomation(operation, owner, undefined, expectedRevision);
     return summarizeAutomation(updated);
   }
@@ -379,7 +385,11 @@ export class ScheduledRunsEngine {
       const decision = await this.acquireLane(automation, now);
       if (!decision.acquired) {
         if (decision.pause === true) {
-          await this.pauseDeniedAutomation(automation, now, decision.reason);
+          await this.pauseAutomation(automation, now, decision.reason, { clearNextRun: true });
+          this.#logger.warn("Paused an unauthorized scheduled run", {
+            automationId: automation.id,
+            reason: decision.reason,
+          });
         } else {
           await this.#store.deferAutomation({
             automationId: automation.id,
@@ -398,7 +408,10 @@ export class ScheduledRunsEngine {
         nextRunAt = nextOccurrence(automation.schedule, now);
       } catch (error) {
         this.releaseLane(decision.release);
-        await this.pauseInvalidSchedule(automation, now, error);
+        await this.pauseAutomation(automation, now, `Invalid recurrence: ${errorMessage(error)}`);
+        this.#logger.error("Paused automation with an invalid schedule", error, {
+          automationId: automation.id,
+        });
         continue;
       }
 
@@ -514,34 +527,12 @@ export class ScheduledRunsEngine {
     }
   }
 
-  private async pauseInvalidSchedule(
-    automation: AutomationDefinition,
-    now: Date,
-    error: unknown,
-  ): Promise<void> {
-    const message = `Invalid recurrence: ${errorMessage(error)}`;
-    await this.#store.updateAutomation(automation.id, (current) => {
-      if (current.revision !== automation.revision || current.nextRunAt !== automation.nextRunAt) {
-        return current;
-      }
-      return {
-        ...current,
-        status: "paused",
-        deferredUntil: null,
-        deferralReason: message,
-        updatedAt: now.toISOString(),
-        revision: current.revision + 1,
-      };
-    });
-    this.#logger.error("Paused automation with an invalid schedule", error, {
-      automationId: automation.id,
-    });
-  }
-
-  private async pauseDeniedAutomation(
+  /** Revision-guarded pause; the guard skips automations changed since they were listed. */
+  private async pauseAutomation(
     automation: AutomationDefinition,
     now: Date,
     reason: string,
+    options: Readonly<{ clearNextRun?: boolean }> = {},
   ): Promise<void> {
     await this.#store.updateAutomation(automation.id, (current) => {
       if (current.revision !== automation.revision || current.nextRunAt !== automation.nextRunAt) {
@@ -550,16 +541,12 @@ export class ScheduledRunsEngine {
       return {
         ...current,
         status: "paused",
-        nextRunAt: null,
+        ...(options.clearNextRun === true ? { nextRunAt: null } : {}),
         deferredUntil: null,
         deferralReason: reason,
         updatedAt: now.toISOString(),
         revision: current.revision + 1,
       };
-    });
-    this.#logger.warn("Paused an unauthorized scheduled run", {
-      automationId: automation.id,
-      reason,
     });
   }
 
@@ -896,12 +883,15 @@ export class ScheduledRunsEngine {
   private async ensureMemoryFile(automationId: string): Promise<string> {
     const directory = join(this.#workspace, ".wirebot", "automations", automationId);
     const path = join(directory, "memory.md");
-    await mkdir(directory, { recursive: true });
+    await ensureDirectory(directory);
     try {
-      await readFile(path, "utf8");
+      await writeFile(path, "# Automation memory\n\n", {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      await writeFile(path, "# Automation memory\n\n", { encoding: "utf8", mode: 0o600 });
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
     return path;
   }
@@ -1030,7 +1020,5 @@ function appendUnavailableAttachmentWarning(
   message: string,
   unavailable: readonly string[],
 ): string {
-  if (unavailable.length === 0) return message;
-  const warning = `Could not attach ${unavailable.join(", ")}.`;
-  return truncate(message.length === 0 ? warning : `${warning}\n\n${message}`, maximumResultLength);
+  return truncate(unavailableAttachmentsWarning(message, unavailable), maximumResultLength);
 }

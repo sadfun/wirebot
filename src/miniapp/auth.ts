@@ -12,7 +12,7 @@ const telegramUserSchema = z
 export interface TelegramInitDataOptions {
   readonly botToken: string;
   readonly allowedUserIds: ReadonlySet<number>;
-  readonly maxAgeSeconds?: number;
+  readonly maxAgeSeconds: number;
   readonly now?: Date;
 }
 
@@ -21,8 +21,19 @@ export interface TelegramInitDataUser {
 }
 
 const HASH_LENGTH = 32;
-const DEFAULT_MAX_AGE_SECONDS = 60 * 60;
 const MAX_CLOCK_SKEW_SECONDS = 30;
+
+/** The WebAppData-derived secret depends only on the bot token; derive it once per token. */
+let cachedSecret: Readonly<{ token: string; secret: Buffer }> | undefined;
+function webAppSecret(botToken: string): Buffer {
+  if (cachedSecret?.token !== botToken) {
+    cachedSecret = {
+      token: botToken,
+      secret: createHmac("sha256", "WebAppData").update(botToken).digest(),
+    };
+  }
+  return cachedSecret.secret;
+}
 
 /**
  * Verifies Telegram's raw WebApp.initData and throws unless it is freshly
@@ -56,8 +67,9 @@ export function validateTelegramInitData(
     .map(([key, value]) => `${key}=${value}`)
     .sort()
     .join("\n");
-  const secret = createHmac("sha256", "WebAppData").update(options.botToken).digest();
-  const expectedHash = createHmac("sha256", secret).update(signedFields).digest();
+  const expectedHash = createHmac("sha256", webAppSecret(options.botToken))
+    .update(signedFields)
+    .digest();
   const receivedHashBytes = Buffer.from(receivedHash, "hex");
   if (
     receivedHashBytes.length !== HASH_LENGTH ||
@@ -68,7 +80,7 @@ export function validateTelegramInitData(
 
   const authDate = parseUnixTimestamp(parameters.get("auth_date"));
   const nowSeconds = Math.floor((options.now ?? new Date()).getTime() / 1_000);
-  const maxAgeSeconds = options.maxAgeSeconds ?? DEFAULT_MAX_AGE_SECONDS;
+  const maxAgeSeconds = options.maxAgeSeconds;
   if (
     !Number.isSafeInteger(nowSeconds) ||
     !Number.isSafeInteger(maxAgeSeconds) ||

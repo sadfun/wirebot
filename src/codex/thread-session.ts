@@ -16,7 +16,11 @@ import type { TurnInterruptResponse } from "../generated/codex/v2/TurnInterruptR
 import { type Deferred, deferred } from "../shared/async.js";
 import { errorMessage } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
-import { generatedFilePaths, resolveOutboundAttachments } from "./output-files.js";
+import {
+  generatedFilePaths,
+  resolveOutboundAttachments,
+  unavailableAttachmentsWarning,
+} from "./output-files.js";
 import { fileChangeActions, finalTextFromTurn, progressActions } from "./progress.js";
 import type { CodexAppServer } from "./rpc.js";
 import type { CodexInvocationContext } from "./service.js";
@@ -66,8 +70,10 @@ interface TurnView extends TurnPresentation {
   readonly terminal: Deferred<FinalizedTurn>;
   readonly phases: Map<string, "commentary" | "final_answer" | null>;
   readonly actions: Map<string, readonly ProgressAction[]>;
-  readonly reasoning: Map<string, readonly string[]>;
+  readonly reasoning: Map<string, string[]>;
   readonly generatedPaths: string[];
+  /** Flattened view of `actions`, rebuilt on item events so per-delta publishes stay cheap. */
+  actionsFlat: readonly ProgressAction[];
   plan: readonly ProgressPlanStep[];
   statusSummary: string | undefined;
   progressMessage: string;
@@ -171,18 +177,6 @@ export class ThreadSession {
     return this.#defaultResponder;
   }
 
-  public defaultToolContext(): Readonly<{
-    invocation: CodexInvocationContext;
-    conversationKey: string;
-    connector: string;
-  }> {
-    return {
-      invocation: this.#defaultInvocation,
-      conversationKey: this.#conversationKey,
-      connector: this.#connector,
-    };
-  }
-
   /**
    * Interrupt every running turn and keep interrupting successors until new
    * work is started. Interrupts are requests, not guarantees: the definitive
@@ -197,12 +191,9 @@ export class ThreadSession {
     return true;
   }
 
-  public async interruptMatching(
-    predicate: (view: TurnView) => boolean,
-  ): Promise<readonly TurnView[]> {
+  public async interruptMatching(predicate: (view: TurnView) => boolean): Promise<void> {
     const views = [...this.#views.values()].filter(predicate);
     await Promise.all(views.map(async (view) => await this.interruptTurn(view)));
-    return views;
   }
 
   public interruptTurn(view: TurnView): Promise<void> {
@@ -280,17 +271,21 @@ export class ThreadSession {
       case "item/reasoning/summaryTextDelta": {
         const view = this.#views.get(notification.params.turnId);
         if (view === undefined) return;
-        const summaries = [...(view.reasoning.get(notification.params.itemId) ?? [])];
+        let summaries = view.reasoning.get(notification.params.itemId);
+        if (summaries === undefined) {
+          summaries = [];
+          view.reasoning.set(notification.params.itemId, summaries);
+        }
         summaries[notification.params.summaryIndex] =
           `${summaries[notification.params.summaryIndex] ?? ""}${notification.params.delta}`;
-        view.reasoning.set(notification.params.itemId, summaries);
         this.publishProgress(view);
         return;
       }
       case "item/fileChange/patchUpdated": {
         const view = this.#views.get(notification.params.turnId);
         if (view === undefined) return;
-        view.actions.set(
+        setItemActions(
+          view,
           notification.params.itemId,
           fileChangeActions(notification.params.changes, false),
         );
@@ -372,6 +367,7 @@ export class ThreadSession {
       actions: new Map(),
       reasoning: new Map(),
       generatedPaths: [],
+      actionsFlat: [],
       plan: [],
       statusSummary: undefined,
       progressMessage: "",
@@ -404,7 +400,7 @@ export class ThreadSession {
       }
     }
     if (item.type === "reasoning") {
-      view.reasoning.set(item.id, item.summary);
+      view.reasoning.set(item.id, [...item.summary]);
     }
     if (
       item.type === "imageGeneration" &&
@@ -414,21 +410,18 @@ export class ThreadSession {
       view.generatedPaths.push(item.savedPath);
     }
     const actions = progressActions(item);
-    if (actions.length > 0) view.actions.set(item.id, actions);
+    if (actions.length > 0) setItemActions(view, item.id, actions);
     this.publishProgress(view);
   }
 
   private publishProgress(view: TurnView): void {
-    const summary =
-      view.statusSummary ??
-      Array.from(view.reasoning.values())
-        .reverse()
-        .flatMap((summaries) => [...summaries].reverse())
-        .find((value) => value.trim().length > 0);
+    // Scheduled turns render nowhere; skip snapshot assembly entirely.
+    if (view.stream === silentStream) return;
+    const summary = view.statusSummary ?? latestReasoningSummary(view.reasoning);
     const progress: ProgressSnapshot = {
       ...(summary === undefined ? {} : { summary }),
       ...(view.progressMessage.trim().length === 0 ? {} : { message: view.progressMessage }),
-      actions: Array.from(view.actions.values()).flat(),
+      actions: view.actionsFlat,
       plan: view.plan,
     };
     view.stream.setProgress(progress);
@@ -490,6 +483,24 @@ export class ThreadSession {
   }
 }
 
+function setItemActions(view: TurnView, itemId: string, actions: readonly ProgressAction[]): void {
+  view.actions.set(itemId, actions);
+  view.actionsFlat = Array.from(view.actions.values()).flat();
+}
+
+/** Newest non-empty reasoning summary, scanning backwards without materializing all of them. */
+function latestReasoningSummary(reasoning: ReadonlyMap<string, string[]>): string | undefined {
+  const entries = [...reasoning.values()];
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const summaries = entries[index] ?? [];
+    for (let summaryIndex = summaries.length - 1; summaryIndex >= 0; summaryIndex -= 1) {
+      const value = summaries[summaryIndex];
+      if (value !== undefined && value.trim().length > 0) return value;
+    }
+  }
+  return undefined;
+}
+
 function deliveryText(
   origin: TurnOrigin,
   turn: Turn,
@@ -500,10 +511,7 @@ function deliveryText(
   }>,
 ): string {
   if (turn.status === "interrupted" && finalText.length === 0) return "Stopped.";
-  const text =
-    resolution.unavailable.length === 0
-      ? finalText
-      : `Could not attach ${resolution.unavailable.join(", ")}.${finalText.length === 0 ? "" : `\n\n${finalText}`}`;
+  const text = unavailableAttachmentsWarning(finalText, resolution.unavailable);
   if (text.length > 0) return text;
   if (turn.items.some((item) => item.type === "contextCompaction")) {
     return "Context compacted.";

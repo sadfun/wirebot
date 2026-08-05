@@ -1,10 +1,11 @@
 import { constants, createWriteStream } from "node:fs";
 import { mkdir, open, realpath, rm, stat } from "node:fs/promises";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { lexer, walkTokens } from "marked";
 import type { OutboundAttachment } from "../core/channel.js";
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem.js";
+import { isPathWithin } from "../shared/fs.js";
 
 // Node does not expose macOS's whole-path O_NOFOLLOW_ANY flag.
 const DARWIN_O_NOFOLLOW_ANY = 0x20000000;
@@ -20,7 +21,17 @@ export function generatedFilePaths(items: readonly ThreadItem[]): readonly strin
   );
 }
 
-export function extractMarkdownFileTargets(text: string): readonly string[] {
+/** Prefix the delivered text with a warning naming attachments that could not be resolved. */
+export function unavailableAttachmentsWarning(
+  finalText: string,
+  unavailable: readonly string[],
+): string {
+  if (unavailable.length === 0) return finalText;
+  const warning = `Could not attach ${unavailable.join(", ")}.`;
+  return finalText.length === 0 ? warning : `${warning}\n\n${finalText}`;
+}
+
+function extractMarkdownFileTargets(text: string): readonly string[] {
   const targets: string[] = [];
   walkTokens(lexer(text), (token) => {
     if (token.type === "link" || token.type === "image") targets.push(token.href);
@@ -79,7 +90,7 @@ export async function resolveOutboundAttachments(
     try {
       const canonical = await realpath(candidate);
       if (seen.has(canonical)) continue;
-      if (!roots.some((root) => isWithin(root, canonical))) {
+      if (!roots.some((root) => isPathWithin(root, canonical))) {
         unavailable.add(filename);
         continue;
       }
@@ -168,14 +179,6 @@ async function canonicalDirectory(path: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
-}
-
-function isWithin(root: string, candidate: string): boolean {
-  const rootRelative = relative(root, candidate);
-  return (
-    rootRelative === "" ||
-    (rootRelative !== ".." && !rootRelative.startsWith(`..${sep}`) && !isAbsolute(rootRelative))
-  );
 }
 
 function localCandidatePath(workspace: string, target: string): string | undefined {

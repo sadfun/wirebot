@@ -33,7 +33,7 @@ interface ZonedParts {
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
-export function parseRecurrence(rule: string): ParsedRecurrence {
+function parseRecurrence(rule: string): ParsedRecurrence {
   const line = extractRuleLine(rule);
   const fields = new Map<string, string>();
   for (const component of line.split(";")) {

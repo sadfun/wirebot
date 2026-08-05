@@ -100,12 +100,22 @@ and reverse-proxy that origin to the container's port 8787 (publish it in your c
 | `PUBLIC_URL`                | unset                      | Public HTTPS origin for the Mini App     |
 | `WIREBOT_TUNNEL`            | `auto`                     | `off` disables the quick-tunnel fallback |
 | `TELEGRAM_API_BASE`         | `https://api.telegram.org` | Alternate Bot API server for large files |
+| `CODEX_CHATGPT_TOKEN`       | unset                      | ChatGPT access token for headless auth   |
+| `CODEX_CHATGPT_ACCOUNT_ID`  | from token                 | Workspace id when the token lacks it     |
+| `CODEX_API_KEY`             | unset                      | OpenAI API key for headless Codex auth   |
 | `HOST` / `PORT`             | `0.0.0.0` / `8787`         | Mini App listener (container default)    |
 | `LOG_LEVEL`                 | `info`                     | `debug`, `info`, `warn`, or `error`      |
 
 ## Authenticate Codex
 
 After Wirebot is running, open a private chat with the bot and send `/login`. Follow the device-code link and complete ChatGPT sign-in. Credentials land in the volume's `codex-home`, so restarts and image updates do not require another login. `/status` shows the active account, and `/logout` removes it.
+
+For headless deployments, credentials can come from the environment instead — Wirebot then signs Codex in on every start, so no interactive `/login` is needed, and the environment reasserts itself over any interactive sign-in after a restart. Leave both variables unset to keep the ChatGPT device-code flow. Either way the secret travels to Codex over its control channel and is stripped from agent subprocess environments.
+
+- `CODEX_CHATGPT_TOKEN` — a ChatGPT access token, the same one the normal auth flow produces (`tokens.access_token` in an existing `codex-home/auth.json`). The workspace id is read from the token's claims; set `CODEX_CHATGPT_ACCOUNT_ID` only if the token doesn't carry one. Voice transcription works with this token. Wirebot cannot refresh a token it was handed, so when it expires, supply a fresh one and restart.
+- `CODEX_API_KEY` — an OpenAI API key. Note that voice transcription uses ChatGPT credentials and stays unavailable with API-key auth.
+
+The two are mutually exclusive.
 
 Voice messages use that same ChatGPT subscription. Wirebot briefly shows a **Transcribing…** thinking block, sends the OGG recording to ChatGPT's Codex dictation service, and then starts the normal Codex turn with both the transcript and original attachment. The pinned, checksum-verified browser-compatible HTTP transport is bundled in the image.
 
@@ -204,7 +214,7 @@ bun run compile    # single-file executable in dist/wirebot
 docker build .     # the release image
 ```
 
-Source runs keep Codex's `workspace-write` sandbox default and store state under `./.wirebot`. The compiled executable embeds the app version, the Codex pin, and bytecode with maximum optimizations; Mini App assets and the pinned toolchains are baked into the image alongside it.
+Source runs keep Codex's `workspace-write` sandbox default and store state under `./.wirebot`. They download the pinned Codex CLI on first start; cloudflared and curl-impersonate are invoked from PATH, where the container image bakes the pinned builds. Without cloudflared (or `PUBLIC_URL`) the quick tunnel is skipped, and without curl-impersonate voice messages are forwarded to Codex untranscribed. The compiled executable embeds the app version, the Codex pin, and bytecode with maximum optimizations; Mini App assets and the pinned toolchains are baked into the image alongside it.
 
 The handwritten application is strict TypeScript. Messaging transports depend only on `src/core/channel.ts`; Telegram is the first implementation.
 

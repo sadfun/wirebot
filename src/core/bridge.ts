@@ -140,6 +140,8 @@ export class CodexBridge {
         message.responder,
         true,
         message.attachments,
+        {},
+        message.syntheticText === true,
       );
       return;
     }
@@ -163,6 +165,7 @@ export class CodexBridge {
           : { deliveryTarget: message.address.deliveryTarget }),
         ...(additionalContext === undefined ? {} : { additionalContext }),
       },
+      message.syntheticText === true,
     );
   }
 

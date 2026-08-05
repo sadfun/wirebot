@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Build stage: compiles the Mini App assets, the wirebot executable, and
-# downloads the pinned toolchains for the target architecture. Runs on the
+# downloads the pinned Codex CLI for the target architecture. Runs on the
 # build platform and cross-compiles, so no emulation is needed here.
 FROM --platform=$BUILDPLATFORM oven/bun:1.3 AS build
 ARG TARGETARCH
@@ -26,6 +26,7 @@ RUN bun scripts/bake-toolchains.ts /toolchains "$([ "$TARGETARCH" = "arm64" ] &&
 # keep across image updates lives in the /data volume, with /usr/local and
 # /home/linuxbrew symlinked into it.
 FROM ubuntu:24.04
+ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -40,6 +41,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ffmpeg imagemagick \
     && rm -rf /var/lib/apt/lists/* \
     && locale-gen en_US.UTF-8
+
+# Pinned quick-tunnel and voice-transcription binaries, verified against
+# GitHub's published SHA-256 digests (update versions and checksums together).
+# Wirebot invokes them from PATH and degrades gracefully when they are absent:
+# no quick tunnel without cloudflared, untranscribed voice messages without
+# curl-impersonate.
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      arm64) \
+        CLOUDFLARED_SHA=405df476437e027fc6d18729a5a77155c0a33a6082aeee60a799a688f3052e66; \
+        CURL_ASSET=curl-impersonate-v2.0.0.aarch64-linux-musl.tar.gz; \
+        CURL_SHA=38d3822a40db1897f4e1f2d763669dbce1e76019d9d884e615ce3500a0faca2c;; \
+      *) \
+        CLOUDFLARED_SHA=ec905ea7b7e327ff8abdde8cb64697a2152de74dbcdbf6aec9db8364eb3886cd; \
+        CURL_ASSET=curl-impersonate-v2.0.0.x86_64-linux-musl.tar.gz; \
+        CURL_SHA=0f3723efb8b5a8712104bcc9b6f617826f646b8efdcafa22b39ca6bc9820f2d0;; \
+    esac; \
+    mkdir -p /opt/wirebot/bin; \
+    curl -fsSL "https://github.com/cloudflare/cloudflared/releases/download/2026.7.2/cloudflared-linux-${TARGETARCH}" \
+      -o /opt/wirebot/bin/cloudflared; \
+    echo "$CLOUDFLARED_SHA  /opt/wirebot/bin/cloudflared" | sha256sum -c -; \
+    curl -fsSL "https://github.com/lexiforest/curl-impersonate/releases/download/v2.0.0/${CURL_ASSET}" \
+      -o /tmp/curl-impersonate.tgz; \
+    echo "$CURL_SHA  /tmp/curl-impersonate.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/curl-impersonate.tgz --no-same-owner -C /opt/wirebot/bin curl-impersonate; \
+    rm /tmp/curl-impersonate.tgz; \
+    chmod 0755 /opt/wirebot/bin/cloudflared /opt/wirebot/bin/curl-impersonate
 
 # The agent user owns /data and has passwordless sudo; the Wirebot install
 # under /opt/wirebot stays root-owned so the agent cannot corrupt it.

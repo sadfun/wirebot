@@ -2,8 +2,6 @@ import { spawn } from "node:child_process";
 import { dirname } from "node:path";
 import { externalProcessEnvironment } from "../shared/environment.js";
 import { BridgeError } from "../shared/errors.js";
-import type { Logger } from "../shared/logger.js";
-import { curlImpersonateTarget, ensureCurlImpersonate } from "./curl-impersonate.js";
 
 export interface TranscriptionRequest {
   readonly path: string;
@@ -22,22 +20,16 @@ export interface TranscriptionTransport {
 
 const responseLimit = 1 * 1_024 * 1_024;
 const requestTimeoutMs = 90_000;
+/** Resolved from PATH; the container image installs the pinned build there (see Dockerfile). */
+const curlImpersonateBinary = "curl-impersonate";
+/** Browser fingerprint supported by the pinned curl-impersonate build. */
+const curlImpersonateTarget = "chrome146";
 
 export class CurlImpersonateTransport implements TranscriptionTransport {
-  readonly #toolchainsDirectory: string;
-  readonly #logger: Logger;
-  #binaryPromise: Promise<string> | undefined;
-
-  public constructor(toolchainsDirectory: string, logger: Logger) {
-    this.#toolchainsDirectory = toolchainsDirectory;
-    this.#logger = logger;
-  }
-
   public async transcribe(request: TranscriptionRequest): Promise<TranscriptionResponse> {
-    const binary = await this.binary();
     const delimiter = `--wirebot-http-status-${crypto.randomUUID()}--`;
     const result = await runCurl(
-      binary,
+      curlImpersonateBinary,
       [
         "--impersonate",
         curlImpersonateTarget,
@@ -82,16 +74,6 @@ export class CurlImpersonateTransport implements TranscriptionTransport {
       );
     }
     return { status, body: result.stdout.slice(0, marker) };
-  }
-
-  private async binary(): Promise<string> {
-    this.#binaryPromise ??= ensureCurlImpersonate(this.#toolchainsDirectory, this.#logger);
-    try {
-      return await this.#binaryPromise;
-    } catch (error) {
-      this.#binaryPromise = undefined;
-      throw error;
-    }
   }
 }
 
@@ -162,7 +144,18 @@ async function runCurl(
     child.stdout.on("data", collect(stdout));
     child.stderr.on("data", collect(stderr));
     child.stdin.on("error", (error) => finish(() => reject(error)));
-    child.once("error", (error) => finish(() => reject(error)));
+    child.once("error", (error) =>
+      finish(() =>
+        reject(
+          (error as NodeJS.ErrnoException).code === "ENOENT"
+            ? new BridgeError(
+                "This deployment has no curl-impersonate transcription transport",
+                "TRANSCRIPTION_UNAVAILABLE",
+              )
+            : error,
+        ),
+      ),
+    );
     child.once("exit", (code, signal) => {
       finish(() => {
         if (code === 0) {

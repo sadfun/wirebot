@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { BridgeError } from "../shared/errors.js";
+import { jwtPayload } from "../shared/text.js";
 import type { TranscriptionTransport } from "./transport.js";
 
 const authSchema = z.object({
@@ -115,15 +116,8 @@ export class ChatGptVoiceTranscriber implements VoiceTranscriber {
 }
 
 function expiresSoon(accessToken: string, now = Date.now()): boolean {
-  try {
-    const payload = accessToken.split(".")[1];
-    if (payload === undefined) return false;
-    const decoded = z
-      .object({ exp: z.number() })
-      .parse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
-    return decoded.exp * 1_000 <= now + 2 * 60_000;
-  } catch {
-    // Opaque future token formats still get a native refresh-and-retry on 401.
-    return false;
-  }
+  // Opaque future token formats parse as undefined and still get a native
+  // refresh-and-retry on 401.
+  const decoded = z.object({ exp: z.number() }).safeParse(jwtPayload(accessToken));
+  return decoded.success && decoded.data.exp * 1_000 <= now + 2 * 60_000;
 }

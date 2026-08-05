@@ -177,13 +177,6 @@ export class AutomationStore extends JsonStore<StoredState> {
     return clone(this.state.runs[id]);
   }
 
-  public listRuns(automationId?: string): AutomationRun[] {
-    return Object.values(this.state.runs)
-      .filter((run) => automationId === undefined || run.automationId === automationId)
-      .map((run) => clone(run))
-      .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
-  }
-
   public async completeRun(id: string, completion: AutomationRunCompletion): Promise<boolean> {
     return await this.mutate((draft) => {
       const run = draft.runs[id];

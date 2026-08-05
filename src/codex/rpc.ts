@@ -15,7 +15,16 @@ import { type Deferred, deferred, delay, withTimeout } from "../shared/async.js"
 import { externalProcessEnvironment } from "../shared/environment.js";
 import { BridgeError, errorMessage } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
+import { terminateChild } from "../shared/process.js";
 import { type CodexLaunch, resolveCodexLaunch } from "./linux-sandbox.js";
+
+/** Whether the error means the app-server transport is gone (never started or exited). */
+export function isCodexTransportUnavailable(error: unknown): boolean {
+  return (
+    error instanceof BridgeError &&
+    (error.code === "CODEX_NOT_RUNNING" || error.code === "CODEX_EXITED")
+  );
+}
 
 type StableClientRequestInput = ClientRequest extends infer Request
   ? Request extends { id: RequestId }
@@ -255,17 +264,7 @@ export class CodexAppServer {
     const child = this.#child;
     if (child === undefined) return;
     this.#stopping = true;
-    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-    const killTimer = setTimeout(() => {
-      if (this.#child === child && child.exitCode === null) child.kill("SIGKILL");
-    }, 5_000);
-    killTimer.unref();
-    child.kill("SIGTERM");
-    try {
-      await exited;
-    } finally {
-      clearTimeout(killTimer);
-    }
+    await terminateChild(child);
   }
 
   private async requestOnce(request: ClientRequestInput): Promise<unknown> {

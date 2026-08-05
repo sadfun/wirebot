@@ -1,6 +1,15 @@
 import { z } from "zod";
 import type { ProviderReference } from "../../core/channel.js";
+import { decodeBase64UrlJson } from "../../shared/text.js";
 import type { TelegramDestination, TelegramReplyRoute } from "./route.js";
+
+/**
+ * Durable conversation key for a Telegram chat. `suffix` narrows the chat to a
+ * topic or thread; "0" is the plain private/group chat (see route.ts).
+ */
+export function telegramConversationKey(chatId: number, suffix: string): string {
+  return `telegram:${chatId}:${suffix}`;
+}
 
 const telegramDestinationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("chat") }),
@@ -56,5 +65,5 @@ function encodeReference(value: unknown): string {
 }
 
 function decodeReference(value: string): unknown {
-  return JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  return decodeBase64UrlJson(value);
 }

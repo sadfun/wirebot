@@ -123,6 +123,11 @@ export interface InboundMessage {
   readonly replyTo?: ProviderReference;
   readonly sender: SenderIdentity;
   readonly text: string;
+  /**
+   * True when `text` is channel-synthesized filler describing attached media
+   * (for example a voice-message placeholder), not words the user wrote.
+   */
+  readonly syntheticText?: boolean;
   readonly command?: InboundCommand;
   readonly attachments: readonly InboundAttachment[];
   readonly responder: MessageResponder;

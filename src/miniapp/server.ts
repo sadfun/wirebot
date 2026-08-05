@@ -5,7 +5,10 @@ import { fileURLToPath } from "node:url";
 import { ZodError, z } from "zod";
 import { AutomationManagementError, type ScheduledRunsEngine } from "../automations/engine.js";
 import { RecurrenceError } from "../automations/recurrence.js";
-import { telegramDeliveryTarget } from "../channels/telegram/references.js";
+import {
+  telegramConversationKey,
+  telegramDeliveryTarget,
+} from "../channels/telegram/references.js";
 import {
   type CodexConfigService,
   ConfigValidationError,
@@ -16,13 +19,20 @@ import type { CodexRuntimeService } from "../codex/runtime-service.js";
 import { SkillBrowserError } from "../codex/skill-browser.js";
 import type { ProviderReference } from "../core/channel.js";
 import type { WirebotSettingsStore } from "../core/settings-store.js";
-import { BridgeError } from "../shared/errors.js";
+import { BridgeError, errorMessage } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
 import { type TelegramInitDataUser, validateTelegramInitData } from "./auth.js";
 
 const MAX_REQUEST_BYTES = 32 * 1_024;
-const DEFAULT_MAX_AUTH_AGE_SECONDS = 60 * 60;
+const MAX_AUTH_AGE_SECONDS = 60 * 60;
 const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
+
+const staticAssets = new Map<string, readonly ["index.html" | "app.js" | "app.css", string]>([
+  ["/miniapp", ["index.html", "text/html; charset=utf-8"]],
+  ["/miniapp/", ["index.html", "text/html; charset=utf-8"]],
+  ["/miniapp/app.js", ["app.js", "text/javascript; charset=utf-8"]],
+  ["/miniapp/app.css", ["app.css", "text/css; charset=utf-8"]],
+]);
 
 const settingsUpdateSchema = z.strictObject({
   expectedVersion: z.string().nullable(),
@@ -74,6 +84,7 @@ export class MiniAppServer {
   private readonly options: MiniAppServerOptions;
   readonly #server: Server;
   readonly #assetDirectory: string;
+  readonly #assetCache = new Map<string, Buffer>();
   #scheduledRuns: MiniAppSchedulesController | undefined;
   #started = false;
 
@@ -157,8 +168,7 @@ export class MiniAppServer {
         this.sendJson(response, 200, await this.options.configService.validate(input));
         return;
       }
-      response.setHeader("Allow", "POST");
-      this.sendError(response, 405, "Method not allowed");
+      this.methodNotAllowed(response, "POST");
       return;
     }
 
@@ -189,7 +199,7 @@ export class MiniAppServer {
             // The version-checked config write has already committed. Preserve that
             // success and surface the runtime's degraded state in the response.
             this.options.logger.warn("Codex resources did not fully refresh after config save", {
-              error: error instanceof Error ? error.message : String(error),
+              error: errorMessage(error),
             });
           }
         }
@@ -202,8 +212,7 @@ export class MiniAppServer {
         });
         return;
       }
-      response.setHeader("Allow", "GET, PUT");
-      this.sendError(response, 405, "Method not allowed");
+      this.methodNotAllowed(response, "GET, PUT");
       return;
     }
 
@@ -213,8 +222,7 @@ export class MiniAppServer {
         this.sendJson(response, 200, { skills: this.options.runtime.skills() });
         return;
       }
-      response.setHeader("Allow", "GET");
-      this.sendError(response, 405, "Method not allowed");
+      this.methodNotAllowed(response, "GET");
       return;
     }
 
@@ -224,8 +232,7 @@ export class MiniAppServer {
         this.sendJson(response, 200, await this.options.runtime.usageLimits());
         return;
       }
-      response.setHeader("Allow", "GET");
-      this.sendError(response, 405, "Method not allowed");
+      this.methodNotAllowed(response, "GET");
       return;
     }
 
@@ -240,8 +247,7 @@ export class MiniAppServer {
         this.sendJson(response, 200, { outcome });
         return;
       }
-      response.setHeader("Allow", "POST");
-      this.sendError(response, 405, "Method not allowed");
+      this.methodNotAllowed(response, "POST");
       return;
     }
 
@@ -256,8 +262,7 @@ export class MiniAppServer {
         this.sendJson(response, 200, await this.options.runtime.browseSkill(skill, path));
         return;
       }
-      response.setHeader("Allow", "GET");
-      this.sendError(response, 405, "Method not allowed");
+      this.methodNotAllowed(response, "GET");
       return;
     }
 
@@ -280,8 +285,7 @@ export class MiniAppServer {
           this.sendJson(response, result.created ? 201 : 200, result);
           return;
         }
-        response.setHeader("Allow", "GET, POST");
-        this.sendError(response, 405, "Method not allowed");
+        this.methodNotAllowed(response, "GET, POST");
         return;
       }
 
@@ -300,8 +304,7 @@ export class MiniAppServer {
         this.sendJson(response, 200, { deleted: true, id });
         return;
       }
-      response.setHeader("Allow", "PATCH, DELETE");
-      this.sendError(response, 405, "Method not allowed");
+      this.methodNotAllowed(response, "PATCH, DELETE");
       return;
     }
 
@@ -313,8 +316,7 @@ export class MiniAppServer {
         this.sendJson(response, 200, { runtime: this.options.runtime.status() });
         return;
       }
-      response.setHeader("Allow", "POST");
-      this.sendError(response, 405, "Method not allowed");
+      this.methodNotAllowed(response, "POST");
       return;
     }
 
@@ -323,16 +325,9 @@ export class MiniAppServer {
       return;
     }
 
-    if (url.pathname === "/miniapp" || url.pathname === "/miniapp/") {
-      await this.sendAsset(response, request.method, "index.html", "text/html; charset=utf-8");
-      return;
-    }
-    if (url.pathname === "/miniapp/app.js") {
-      await this.sendAsset(response, request.method, "app.js", "text/javascript; charset=utf-8");
-      return;
-    }
-    if (url.pathname === "/miniapp/app.css") {
-      await this.sendAsset(response, request.method, "app.css", "text/css; charset=utf-8");
+    const asset = staticAssets.get(url.pathname);
+    if (asset !== undefined) {
+      await this.sendAsset(response, request.method, asset[0], asset[1]);
       return;
     }
 
@@ -347,8 +342,13 @@ export class MiniAppServer {
     return validateTelegramInitData(authorization.slice(4), {
       botToken: this.options.botToken,
       allowedUserIds: this.options.allowedUserIds,
-      maxAgeSeconds: DEFAULT_MAX_AUTH_AGE_SECONDS,
+      maxAgeSeconds: MAX_AUTH_AGE_SECONDS,
     });
+  }
+
+  private methodNotAllowed(response: ServerResponse, allow: string): void {
+    response.setHeader("Allow", allow);
+    this.sendError(response, 405, "Method not allowed");
   }
 
   private requireScheduledRuns(): MiniAppSchedulesController {
@@ -384,8 +384,12 @@ export class MiniAppServer {
     name: "index.html" | "app.js" | "app.css",
     contentType: string,
   ): Promise<void> {
-    const path = join(this.#assetDirectory, name);
-    const contents = await readFile(path);
+    // Build outputs never change while the process runs; serve them from memory.
+    let contents = this.#assetCache.get(name);
+    if (contents === undefined) {
+      contents = await readFile(join(this.#assetDirectory, name));
+      this.#assetCache.set(name, contents);
+    }
     response.writeHead(200, {
       "Cache-Control": "no-cache",
       "Content-Length": String(contents.byteLength),
@@ -494,7 +498,8 @@ function telegramScheduleScope(userId: number): Readonly<{
     conversation: {
       provider: "telegram",
       resource: "conversation",
-      id: `telegram:${userId}:0`,
+      // The private bot chat: chat id = user id, "0" = plain-chat suffix.
+      id: telegramConversationKey(userId, "0"),
     },
     deliveryTarget: telegramDeliveryTarget(userId, { destination: { kind: "chat" } }),
   };

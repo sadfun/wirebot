@@ -1,9 +1,28 @@
-import { mkdir, open, rename, rm } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export async function ensureDirectory(path: string): Promise<void> {
   await mkdir(path, { recursive: true });
+}
+
+/** Whether `candidate` is `root` itself or a path inside it (no `..` escape). */
+export function isPathWithin(root: string, candidate: string): boolean {
+  const rootRelative = relative(root, candidate);
+  return (
+    rootRelative === "" ||
+    (rootRelative !== ".." && !rootRelative.startsWith(`..${sep}`) && !isAbsolute(rootRelative))
+  );
+}
+
+/** The file's UTF-8 contents, or undefined when it does not exist. */
+export async function readFileIfExists(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 export async function atomicWriteFile(

@@ -33,6 +33,7 @@ import {
 } from "./message.js";
 import {
   parseTelegramDeliveryTarget,
+  telegramConversationKey,
   telegramDeliveryTarget,
   telegramMessageReference,
 } from "./references.js";
@@ -68,7 +69,7 @@ interface GuestMessageWithReferences extends Message {
   readonly reference_messages?: readonly Message[];
 }
 
-export const telegramBotCommands: readonly BotCommand[] = botCommands.map((entry) => ({
+const telegramBotCommands: readonly BotCommand[] = botCommands.map((entry) => ({
   command: entry.command,
   description: entry.menuDescription,
 }));
@@ -78,7 +79,7 @@ export interface TelegramChannelOptions {
   readonly allowedBotUserIds?: ReadonlySet<number>;
 }
 
-export function telegramMenuButton(miniAppUrl: string | undefined): MenuButton {
+function telegramMenuButton(miniAppUrl: string | undefined): MenuButton {
   if (miniAppUrl === undefined) {
     return { type: "commands" };
   }
@@ -97,7 +98,7 @@ function menuButtonsMatch(actual: MenuButton, expected: MenuButton): boolean {
   return actual.text === expected.text && actual.web_app.url === expected.web_app.url;
 }
 
-export async function reconcileTelegramMenuButton(
+async function reconcileTelegramMenuButton(
   api: TelegramMenuButtonApi,
   allowedUserIds: ReadonlySet<number>,
   miniAppUrl: string | undefined,
@@ -157,6 +158,7 @@ export class TelegramChannel implements MessagingChannel {
   #handler: MessageHandler | undefined;
   #runner: RunnerHandle | undefined;
   #botUsername: string | undefined;
+  #guestMentionPattern: RegExp | undefined;
 
   public constructor(
     token: string,
@@ -205,6 +207,8 @@ export class TelegramChannel implements MessagingChannel {
     await this.#bot.init();
     const bot = this.#bot.botInfo;
     this.#botUsername = bot.username;
+    // Telegram usernames are [A-Za-z0-9_], so no regex escaping is needed.
+    this.#guestMentionPattern = new RegExp(`@${bot.username}\\b`, "gi");
     this.#logger.info("Telegram bot connected through grammY", {
       username: bot.username,
       guestMode: bot.supports_guest_queries ?? false,
@@ -307,40 +311,48 @@ export class TelegramChannel implements MessagingChannel {
     const command = commandMatch.kind === "command" ? commandMatch.command : undefined;
     const normalized =
       command !== undefined
-        ? { text: message.text?.trim() ?? "", files: [] }
+        ? { text: message.text?.trim() ?? "", syntheticText: false, files: [] }
         : normalizeTelegramMessage(message, referenceMessages);
     const directory = join(this.#attachmentDirectory, crypto.randomUUID());
-    const attachments: InboundAttachment[] = [];
-    const failures: string[] = [];
-    for (const [index, file] of normalized.files.entries()) {
-      const description = describeTelegramFile(file);
-      try {
-        const path = await downloadTelegramFile(file, {
-          api,
-          apiRoot: this.#apiRoot,
-          botToken: this.#token,
-          directory,
-          index,
-        });
-        attachments.push({
-          kind: file.nativeImage ? "image" : file.voiceMessage === true ? "voice" : "file",
-          path,
-          description,
-        });
-      } catch (error) {
-        this.#logger.warn("Could not download Telegram attachment", {
-          messageId: message.message_id,
-          description,
-          error: errorMessage(error).replaceAll(this.#token, "<redacted>"),
-        });
-        const reason =
-          error instanceof TelegramFileDownloadError
-            ? error.userMessage
-            : "Telegram could not download it; the cloud Bot API's 20 MB limit may apply";
-        failures.push(`[${description} was not attached: ${reason}.]`);
-      }
-    }
+    const downloads = await Promise.all(
+      normalized.files.map(async (file, index) => {
+        const description = describeTelegramFile(file);
+        try {
+          const path = await downloadTelegramFile(file, {
+            api,
+            apiRoot: this.#apiRoot,
+            botToken: this.#token,
+            directory,
+            index,
+          });
+          const attachment: InboundAttachment = {
+            kind: file.nativeImage ? "image" : file.voiceMessage === true ? "voice" : "file",
+            path,
+            description,
+          };
+          return { attachment };
+        } catch (error) {
+          this.#logger.warn("Could not download Telegram attachment", {
+            messageId: message.message_id,
+            description,
+            error: errorMessage(error).replaceAll(this.#token, "<redacted>"),
+          });
+          const reason =
+            error instanceof TelegramFileDownloadError
+              ? error.userMessage
+              : "Telegram could not download it; the cloud Bot API's 20 MB limit may apply";
+          return { failure: `[${description} was not attached: ${reason}.]` };
+        }
+      }),
+    );
+    const attachments = downloads.flatMap((download) =>
+      download.attachment === undefined ? [] : [download.attachment],
+    );
+    const failures = downloads.flatMap((download) =>
+      download.failure === undefined ? [] : [download.failure],
+    );
     const text = [normalized.text, ...failures].filter((part) => part.length > 0).join("\n\n");
+    const syntheticText = normalized.syntheticText && failures.length === 0;
     if (guest) {
       const normalizedText = this.stripGuestMention(text);
       if (normalizedText.length === 0 || guestQueryId === undefined) return;
@@ -355,6 +367,7 @@ export class TelegramChannel implements MessagingChannel {
         },
         sender: senderIdentity(sender),
         text: normalizedText,
+        syntheticText,
         ...(command === undefined ? {} : { command }),
         attachments,
         responder,
@@ -364,6 +377,7 @@ export class TelegramChannel implements MessagingChannel {
     if (text.length === 0 || incomingRoute === undefined) return;
     await this.dispatch(api, message, incomingRoute, sender, String(message.message_id), {
       text,
+      syntheticText,
       ...(command === undefined ? {} : { command }),
       attachments,
       replyToMessageId: message.reply_to_message?.message_id,
@@ -378,6 +392,7 @@ export class TelegramChannel implements MessagingChannel {
     inboundId: string,
     content: {
       readonly text: string;
+      readonly syntheticText?: boolean;
       readonly command?: InboundCommand;
       readonly attachments: readonly InboundAttachment[];
       readonly replyToMessageId?: number | undefined;
@@ -395,7 +410,7 @@ export class TelegramChannel implements MessagingChannel {
       id: inboundId,
       address: {
         channel: this.name,
-        key: `telegram:${message.chat.id}:${incomingRoute.conversationSuffix}`,
+        key: telegramConversationKey(message.chat.id, incomingRoute.conversationSuffix),
         isPrivate: message.chat.type === "private",
         isGuest: false,
         deliveryTarget: telegramDeliveryTarget(message.chat.id, incomingRoute.reply),
@@ -406,6 +421,7 @@ export class TelegramChannel implements MessagingChannel {
         : { replyTo: telegramMessageReference(message.chat.id, content.replyToMessageId) }),
       sender: senderIdentity(from),
       text: content.text,
+      syntheticText: content.syntheticText === true,
       ...(content.command === undefined ? {} : { command: content.command }),
       attachments: content.attachments,
       responder,
@@ -546,9 +562,9 @@ export class TelegramChannel implements MessagingChannel {
   }
 
   private stripGuestMention(text: string): string {
-    const username = this.#botUsername;
-    if (username === undefined) return text;
-    return text.replace(new RegExp(`@${username}\\b`, "gi"), "").trim();
+    const pattern = this.#guestMentionPattern;
+    if (pattern === undefined) return text;
+    return text.replace(pattern, "").trim();
   }
 }
 

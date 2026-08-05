@@ -4,6 +4,7 @@ import type { AskForApproval } from "../generated/codex/v2/AskForApproval.js";
 import type { ConfigBatchWriteParams } from "../generated/codex/v2/ConfigBatchWriteParams.js";
 import type { ConfigEdit } from "../generated/codex/v2/ConfigEdit.js";
 import type { ConfigLayer } from "../generated/codex/v2/ConfigLayer.js";
+import type { ConfigLayerSource } from "../generated/codex/v2/ConfigLayerSource.js";
 import type { ConfigReadResponse } from "../generated/codex/v2/ConfigReadResponse.js";
 import type { ConfigRequirements } from "../generated/codex/v2/ConfigRequirements.js";
 import type { ConfigRequirementsReadResponse } from "../generated/codex/v2/ConfigRequirementsReadResponse.js";
@@ -16,6 +17,7 @@ import type { ModelListResponse } from "../generated/codex/v2/ModelListResponse.
 import type { PermissionProfileListResponse } from "../generated/codex/v2/PermissionProfileListResponse.js";
 import type { PermissionProfileSummary } from "../generated/codex/v2/PermissionProfileSummary.js";
 import { BridgeError } from "../shared/errors.js";
+import { capitalize } from "../shared/text.js";
 import type { CodexAppServer } from "./rpc.js";
 
 const granularApprovalSchema = z.strictObject({
@@ -119,16 +121,19 @@ const configUpdateSchema = z.strictObject({
 export type EditableCodexConfig = z.infer<typeof editableCodexConfigSchema>;
 type ConfigUpdate = z.infer<typeof configUpdateSchema>;
 
-export interface ModelCapability {
-  readonly model: string;
-  readonly displayName: string;
-  readonly description: string;
-  readonly supportedReasoningEfforts: Model["supportedReasoningEfforts"];
-  readonly defaultReasoningEffort: Model["defaultReasoningEffort"];
-  readonly serviceTiers: Model["serviceTiers"];
-  readonly defaultServiceTier: string | null;
-  readonly isDefault: boolean;
-}
+export type ModelCapability = Readonly<
+  Pick<
+    Model,
+    | "model"
+    | "displayName"
+    | "description"
+    | "supportedReasoningEfforts"
+    | "defaultReasoningEffort"
+    | "serviceTiers"
+    | "defaultServiceTier"
+    | "isDefault"
+  >
+>;
 
 export interface ModelProviderCapability {
   readonly id: string;
@@ -284,7 +289,7 @@ export class CodexConfigService {
       }),
       this.capabilities(),
     ]);
-    const userLayer = findUserLayer(response.layers);
+    const userLayer = findBaseUserLayer(response.layers);
     const capabilities: ConfigCapabilities = {
       ...cachedCapabilities,
       modelProviders: toModelProviderCapabilities(response),
@@ -500,20 +505,14 @@ function validateConfig(
   }
 
   const otherActiveLayers = activeLayers(state.response.layers).filter(
-    (layer) => !(layer.name.type === "user" && layer.name.profile === null),
+    (layer) => !isBaseUserLayer(layer),
   );
-  const hasOtherDefaultPermissions = otherActiveLayers.some(
-    (layer) => readActiveValue(asRecord(layer.config).default_permissions) !== undefined,
-  );
-  const hasOtherSandboxMode = otherActiveLayers.some(
-    (layer) => readActiveValue(asRecord(layer.config).sandbox_mode) !== undefined,
-  );
-  const hasOtherWorkspaceSandbox = otherActiveLayers.some(
-    (layer) => readActiveValue(asRecord(layer.config).sandbox_workspace_write) !== undefined,
-  );
-  const userLayer = findUserLayer(state.response.layers);
+  const hasOtherDefaultPermissions = hasActiveValue(otherActiveLayers, "default_permissions");
+  const hasOtherSandboxMode = hasActiveValue(otherActiveLayers, "sandbox_mode");
+  const hasOtherWorkspaceSandbox = hasActiveValue(otherActiveLayers, "sandbox_workspace_write");
+  const userLayer = findBaseUserLayer(state.response.layers);
   const hasUserWorkspaceSandbox =
-    readActiveValue(asRecord(userLayer?.config).sandbox_workspace_write) !== undefined;
+    userLayer !== undefined && hasActiveValue([userLayer], "sandbox_workspace_write");
   const hasDefaultPermissions = values.default_permissions !== null || hasOtherDefaultPermissions;
   const hasSandboxMode = values.sandbox_mode !== null || hasOtherSandboxMode;
   const hasWorkspaceSandbox = hasUserWorkspaceSandbox || hasOtherWorkspaceSandbox;
@@ -688,16 +687,30 @@ function toFeatureCapabilities(
 }
 
 function sentenceCase(name: string): string {
-  const spaced = name.replaceAll("_", " ");
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+  return capitalize(name.replaceAll("_", " "));
 }
 
 function activeLayers(layers: readonly ConfigLayer[] | null): readonly ConfigLayer[] {
   return layers?.filter((layer) => layer.disabledReason === null) ?? [];
 }
 
-function findUserLayer(layers: readonly ConfigLayer[] | null): ConfigLayer | undefined {
-  return layers?.find((layer) => layer.name.type === "user" && layer.name.profile === null);
+function hasActiveValue(layers: readonly ConfigLayer[], key: string): boolean {
+  return layers.some((layer) => readActiveValue(asRecord(layer.config)[key]) !== undefined);
+}
+
+/** The profile-less "user" layer — the file the Mini App and hot reload treat as the user's config. */
+export type BaseUserConfigLayer = ConfigLayer & {
+  readonly name: Extract<ConfigLayerSource, { readonly type: "user" }>;
+};
+
+function isBaseUserLayer(layer: ConfigLayer): layer is BaseUserConfigLayer {
+  return layer.name.type === "user" && layer.name.profile === null;
+}
+
+export function findBaseUserLayer(
+  layers: readonly ConfigLayer[] | null,
+): BaseUserConfigLayer | undefined {
+  return layers?.find(isBaseUserLayer);
 }
 
 function asRecord(value: JsonValue | undefined): Readonly<Record<string, JsonValue | undefined>> {

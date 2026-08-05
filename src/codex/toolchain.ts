@@ -26,6 +26,26 @@ const installMarkerSchema = z.object({
   installedAt: z.string(),
 });
 
+interface InstallMarker {
+  readonly version: string;
+  readonly target: string;
+}
+
+/** True when the marker matches `expected` and the installed binary exists. */
+async function installIsReady(
+  markerPath: string,
+  binaryPath: string,
+  expected: InstallMarker,
+): Promise<boolean> {
+  try {
+    const marker = installMarkerSchema.parse(JSON.parse(await readFile(markerPath, "utf8")));
+    await access(binaryPath);
+    return marker.version === expected.version && marker.target === expected.target;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Codex publishes its native binaries as npm platform packages versioned
  * `<version>-<platform>-<arch>` under @openai/codex; each ships a
@@ -48,7 +68,7 @@ const vendorTriples: Readonly<Record<string, string>> = {
 /** The Codex CLI version this Wirebot build is pinned to, embedded at build time. */
 export const pinnedCodexVersion: string = versionSchema.parse(pinnedCodexVersionText.trim());
 
-export function hostCodexTarget(): CodexTarget {
+function hostCodexTarget(): CodexTarget {
   const target = { platform: process.platform, arch: process.arch };
   if (vendorTriples[`${target.platform}-${target.arch}`] === undefined) {
     throw new BridgeError(
@@ -90,7 +110,8 @@ export class CodexToolchainManager {
     const versionDirectory = join(this.#toolchainsDirectory, version);
     const markerPath = join(versionDirectory, ".wirebot-install.json");
     const binaryPath = this.binaryPath(versionDirectory, target);
-    if (await this.installIsReady(markerPath, binaryPath, version, target)) return binaryPath;
+    const expectedMarker = { version, target: targetKey(target) } as const;
+    if (await installIsReady(markerPath, binaryPath, expectedMarker)) return binaryPath;
 
     await ensureDirectory(this.#toolchainsDirectory);
     const lockPath = join(this.#toolchainsDirectory, `${version}.installing`);
@@ -104,7 +125,7 @@ export class CodexToolchainManager {
 
     if (!ownsLock) {
       for (let attempt = 0; attempt < 120; attempt += 1) {
-        if (await this.installIsReady(markerPath, binaryPath, version, target)) return binaryPath;
+        if (await installIsReady(markerPath, binaryPath, expectedMarker)) return binaryPath;
         await delay(1_000);
       }
       throw new BridgeError(
@@ -114,13 +135,12 @@ export class CodexToolchainManager {
     }
 
     try {
-      if (await this.installIsReady(markerPath, binaryPath, version, target)) return binaryPath;
+      if (await installIsReady(markerPath, binaryPath, expectedMarker)) return binaryPath;
       this.#logger.info("Installing isolated Codex CLI", { version, ...target });
       await this.install(version, target, versionDirectory);
       await access(binaryPath);
       await atomicWriteJson(markerPath, {
-        version,
-        target: targetKey(target),
+        ...expectedMarker,
         installedAt: new Date().toISOString(),
       });
       return binaryPath;
@@ -190,21 +210,6 @@ export class CodexToolchainManager {
       );
     }
     return join(versionDirectory, "vendor", triple, "bin", "codex");
-  }
-
-  private async installIsReady(
-    markerPath: string,
-    binaryPath: string,
-    version: string,
-    target: CodexTarget,
-  ): Promise<boolean> {
-    try {
-      const marker = installMarkerSchema.parse(JSON.parse(await readFile(markerPath, "utf8")));
-      await access(binaryPath);
-      return marker.version === version && marker.target === targetKey(target);
-    } catch {
-      return false;
-    }
   }
 }
 

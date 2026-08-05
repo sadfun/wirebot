@@ -1,5 +1,22 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
+import { once } from "node:events";
 import { BridgeError } from "./errors.js";
+
+/** SIGTERM the child and wait for it to exit, escalating to SIGKILL after `graceMs`. */
+export async function terminateChild(child: ChildProcess, graceMs = 5_000): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = once(child, "exit");
+  child.kill("SIGTERM");
+  const killTimer = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }, graceMs);
+  killTimer.unref();
+  try {
+    await exited;
+  } finally {
+    clearTimeout(killTimer);
+  }
+}
 
 export interface CommandResult {
   readonly stdout: string;

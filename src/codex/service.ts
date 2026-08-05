@@ -34,7 +34,11 @@ import { type Deferred, deferred, KeyedSerialQueue } from "../shared/async.js";
 import { BridgeError, errorMessage } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
 import type { VoiceTranscriber } from "../transcription/service.js";
-import type { ApplicationContext, CodexAppServer } from "./rpc.js";
+import {
+  type ApplicationContext,
+  type CodexAppServer,
+  isCodexTransportUnavailable,
+} from "./rpc.js";
 import {
   type FinalizedTurn,
   silentStream,
@@ -279,6 +283,7 @@ export class CodexService {
     ephemeral = false,
     attachments: readonly InboundAttachment[] = [],
     invocation: CodexInvocationContext = {},
+    syntheticText = false,
   ): Promise<void> {
     const stream = responder.createStream();
     const voiceAttachments = attachments.filter((attachment) => attachment.kind === "voice");
@@ -290,10 +295,12 @@ export class CodexService {
       let preparedText: Promise<string> | undefined;
       if (shouldTranscribe) {
         await stream.start({ summary: "Transcribing…", actions: [], plan: [] });
-        preparedText = this.transcribeVoiceMessages(text, voiceAttachments).then((prepared) => {
-          stream.setProgress({ summary: "Thinking…", actions: [], plan: [] });
-          return prepared;
-        });
+        preparedText = this.transcribeVoiceMessages(text, syntheticText, voiceAttachments).then(
+          (prepared) => {
+            stream.setProgress({ summary: "Thinking…", actions: [], plan: [] });
+            return prepared;
+          },
+        );
         void preparedText.catch(() => undefined);
       } else if (startsQueued) {
         await stream.start({ summary: "Queued behind earlier work…", actions: [], plan: [] });
@@ -505,15 +512,28 @@ export class CodexService {
 
   private async transcribeVoiceMessages(
     text: string,
+    syntheticText: boolean,
     attachments: readonly InboundAttachment[],
   ): Promise<string> {
     const transcriber = this.#voiceTranscriber;
     if (transcriber === undefined) return text;
-    const transcripts: string[] = [];
-    for (const attachment of attachments) {
-      transcripts.push(await transcriber.transcribe(attachment.path));
+    let transcripts: readonly string[];
+    try {
+      transcripts = await Promise.all(
+        attachments.map(async (attachment) => await transcriber.transcribe(attachment.path)),
+      );
+    } catch (error) {
+      // A deployment without the transcription transport forwards the voice
+      // message untranscribed; other failures (auth, HTTP) surface to the user.
+      if (!(error instanceof BridgeError) || error.code !== "TRANSCRIPTION_UNAVAILABLE") {
+        throw error;
+      }
+      this.#logger.info(
+        "Voice transcription is unavailable; forwarding the voice message untranscribed",
+      );
+      return text;
     }
-    const base = text.trim() === "[Voice message]" ? "" : text.trim();
+    const base = syntheticText ? "" : text.trim();
     const blocks = transcripts.map((transcript, index) => {
       const heading =
         transcripts.length === 1
@@ -610,18 +630,10 @@ export class CodexService {
       this.#conversationSessions.get(conversationKey)?.busy === true ||
       (this.#foregroundWaiting.get(conversationKey) ?? 0) > 0
     ) {
-      throw new BridgeError(
-        "The conversation is busy. Stop or wait for the current turn first.",
-        "CONVERSATION_BUSY",
-      );
+      throw conversationBusyError();
     }
     const lease = this.#queue.tryAcquire(conversationKey);
-    if (lease === undefined) {
-      throw new BridgeError(
-        "The conversation is busy. Stop or wait for the current turn first.",
-        "CONVERSATION_BUSY",
-      );
-    }
+    if (lease === undefined) throw conversationBusyError();
     try {
       const settings = await this.#effectiveSettings();
       const resumedThreadId = await this.resumeThreadStrict(
@@ -683,6 +695,23 @@ export class CodexService {
     });
   }
 
+  public async loginWithApiKey(apiKey: string): Promise<void> {
+    await this.#rpc.request<LoginAccountResponse>({
+      method: "account/login/start",
+      params: { type: "apiKey", apiKey },
+    });
+  }
+
+  public async loginWithChatgptTokens(
+    accessToken: string,
+    chatgptAccountId: string,
+  ): Promise<void> {
+    await this.#rpc.request<LoginAccountResponse>({
+      method: "account/login/start",
+      params: { type: "chatgptAuthTokens", accessToken, chatgptAccountId },
+    });
+  }
+
   public async logout(): Promise<void> {
     await this.#rpc.request<unknown>({ method: "account/logout", params: undefined });
   }
@@ -703,12 +732,7 @@ export class CodexService {
         try {
           return await this.resumeThreadStrict(stored, settings, conversationKey, connector);
         } catch (error) {
-          if (
-            error instanceof BridgeError &&
-            (error.code === "CODEX_NOT_RUNNING" || error.code === "CODEX_EXITED")
-          ) {
-            throw error;
-          }
+          if (isCodexTransportUnavailable(error)) throw error;
           this.#logger.warn("Stored Codex thread could not be resumed; starting a new thread", {
             conversationKey,
             error: errorMessage(error),
@@ -878,8 +902,7 @@ export class CodexService {
           }`,
         );
         const response: CommandExecutionRequestApprovalResponse = {
-          decision:
-            choice === "session" ? "acceptForSession" : choice === "once" ? "accept" : "decline",
+          decision: approvalDecision(choice),
         };
         await this.#rpc.reply(request.id, response);
         break;
@@ -896,8 +919,7 @@ export class CodexService {
           }`,
         );
         const response: FileChangeRequestApprovalResponse = {
-          decision:
-            choice === "session" ? "acceptForSession" : choice === "once" ? "accept" : "decline",
+          decision: approvalDecision(choice),
         };
         await this.#rpc.reply(request.id, response);
         break;
@@ -1064,6 +1086,12 @@ function conversationBusyError(): BridgeError {
   );
 }
 
+function approvalDecision(
+  choice: "once" | "session" | "decline",
+): "accept" | "acceptForSession" | "decline" {
+  return choice === "session" ? "acceptForSession" : choice === "once" ? "accept" : "decline";
+}
+
 function notificationThreadId(notification: ServerNotification): string | undefined {
   const params: unknown = notification.params;
   if (typeof params !== "object" || params === null) return undefined;
@@ -1071,7 +1099,7 @@ function notificationThreadId(notification: ServerNotification): string | undefi
   return typeof threadId === "string" ? threadId : undefined;
 }
 
-export function createTurnInput(
+function createTurnInput(
   text: string,
   connector: string,
   attachments: readonly InboundAttachment[],
@@ -1093,7 +1121,7 @@ export function createTurnInput(
   ];
 }
 
-export function createRemoteClientContext(connector: string): ApplicationContext {
+function createRemoteClientContext(connector: string): ApplicationContext {
   const connectorName = connectorDisplayName(connector);
   return {
     "wirebot.remote-client": {

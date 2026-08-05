@@ -1,5 +1,6 @@
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { extname, isAbsolute, relative, resolve } from "node:path";
+import { isPathWithin } from "../shared/fs.js";
 
 const MAX_SKILL_FILE_BYTES = 2 * 1_024 * 1_024;
 const MAX_DIRECTORY_ENTRIES = 1_000;
@@ -102,7 +103,7 @@ async function readDirectory(
       children.map(async (child): Promise<SkillDirectoryEntry | undefined> => {
         const childPath = resolve(directory, child.name);
         const resolved = await realpath(childPath).catch(() => undefined);
-        if (resolved === undefined || !isContained(root, resolved)) return undefined;
+        if (resolved === undefined || !isPathWithin(root, resolved)) return undefined;
         const details = await stat(resolved).catch(() => undefined);
         if (details === undefined || (!details.isDirectory() && !details.isFile()))
           return undefined;
@@ -140,14 +141,9 @@ function validateRequestedPath(requestedPath: string): void {
 }
 
 function assertContained(root: string, candidate: string): void {
-  if (!isContained(root, candidate)) {
+  if (!isPathWithin(root, candidate)) {
     throw new SkillBrowserError("The requested path is outside this skill.", "forbidden");
   }
-}
-
-function isContained(root: string, candidate: string): boolean {
-  const path = relative(root, candidate);
-  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
 }
 
 function normalizeRelativePath(path: string): string {

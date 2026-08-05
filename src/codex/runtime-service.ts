@@ -2,8 +2,6 @@ import type { Personality } from "../generated/codex/Personality.js";
 import type { ServerNotification } from "../generated/codex/ServerNotification.js";
 import type { Config } from "../generated/codex/v2/Config.js";
 import type { ConfigBatchWriteParams } from "../generated/codex/v2/ConfigBatchWriteParams.js";
-import type { ConfigLayer } from "../generated/codex/v2/ConfigLayer.js";
-import type { ConfigLayerSource } from "../generated/codex/v2/ConfigLayerSource.js";
 import type { ConfigReadResponse } from "../generated/codex/v2/ConfigReadResponse.js";
 import type { ConsumeAccountRateLimitResetCreditParams } from "../generated/codex/v2/ConsumeAccountRateLimitResetCreditParams.js";
 import type { ConsumeAccountRateLimitResetCreditResponse } from "../generated/codex/v2/ConsumeAccountRateLimitResetCreditResponse.js";
@@ -14,10 +12,15 @@ import type { RateLimitSnapshot } from "../generated/codex/v2/RateLimitSnapshot.
 import type { RateLimitWindow } from "../generated/codex/v2/RateLimitWindow.js";
 import type { SkillMetadata } from "../generated/codex/v2/SkillMetadata.js";
 import type { SkillsListResponse } from "../generated/codex/v2/SkillsListResponse.js";
+import { KeyedSerialQueue } from "../shared/async.js";
 import { BridgeError, errorMessage } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
-import type { CodexConfigService } from "./config-service.js";
-import type { CodexAppServer, CodexAppServerExit } from "./rpc.js";
+import { type CodexConfigService, findBaseUserLayer } from "./config-service.js";
+import {
+  type CodexAppServer,
+  type CodexAppServerExit,
+  isCodexTransportUnavailable,
+} from "./rpc.js";
 import type { CodexService, EffectiveCodexSettings, ExplicitSkillInput } from "./service.js";
 import { readSkillResource, type SkillResource } from "./skill-browser.js";
 
@@ -88,6 +91,8 @@ export class CodexRuntimeService {
   readonly #workspace: string;
   readonly #logger: Logger;
   readonly #skills = new Map<string, SkillMetadata>();
+  #skillsByLowerName = new Map<string, SkillMetadata>();
+  #skillMentionPattern: RegExp | undefined;
   #settings: EffectiveCodexSettings = {};
   #serverModelProvider: string | null | undefined;
   #status: CodexRuntimeStatus = {
@@ -97,7 +102,7 @@ export class CodexRuntimeService {
     lastAppliedAt: null,
     configPath: null,
   };
-  #operationTail: Promise<void> = Promise.resolve();
+  readonly #operations = new KeyedSerialQueue();
   #unsubscribeNotification: (() => void) | undefined;
   #unsubscribeExit: (() => void) | undefined;
   #stopped = true;
@@ -181,21 +186,14 @@ export class CodexRuntimeService {
   }
 
   public skillInputs(text: string): readonly ExplicitSkillInput[] {
-    if (this.#skills.size === 0) return [];
-    const byName = new Map(
-      [...this.#skills.values()].map((skill) => [skill.name.toLowerCase(), skill] as const),
-    );
-    const alternatives = [...this.#skills.keys()]
-      .sort((left, right) => right.length - left.length)
-      .map(escapeRegExp)
-      .join("|");
-    const pattern = new RegExp(`(^|[^A-Za-z0-9_])\\$(${alternatives})(?=$|[^A-Za-z0-9_:-])`, "gi");
+    const pattern = this.#skillMentionPattern;
+    if (pattern === undefined) return [];
     const inputs: ExplicitSkillInput[] = [];
     const included = new Set<string>();
     for (const match of text.matchAll(pattern)) {
       const mentioned = match[2];
       if (mentioned === undefined) continue;
-      const skill = byName.get(mentioned.toLowerCase());
+      const skill = this.#skillsByLowerName.get(mentioned.toLowerCase());
       if (skill === undefined || included.has(skill.name)) continue;
       included.add(skill.name);
       inputs.push({ type: "skill", name: skill.name, path: skill.path });
@@ -233,7 +231,7 @@ export class CodexRuntimeService {
       try {
         await this.readConfig();
       } catch (error) {
-        if (!isTransportUnavailable(error)) {
+        if (!isCodexTransportUnavailable(error)) {
           this.updateStatus({
             state: "degraded",
             lastError: errorMessage(error),
@@ -304,7 +302,7 @@ export class CodexRuntimeService {
       });
     } catch (error) {
       errors.push(errorMessage(error));
-      if (isTransportUnavailable(error)) restartRequired = true;
+      if (isCodexTransportUnavailable(error)) restartRequired = true;
     }
 
     if (options.reloadMcp) {
@@ -312,7 +310,7 @@ export class CodexRuntimeService {
         await this.#rpc.request<unknown>({ method: "config/mcpServer/reload", params: undefined });
       } catch (error) {
         errors.push(errorMessage(error));
-        if (isTransportUnavailable(error)) restartRequired = true;
+        if (isCodexTransportUnavailable(error)) restartRequired = true;
       }
     }
 
@@ -345,6 +343,7 @@ export class CodexRuntimeService {
       for (const skill of entry?.skills ?? []) {
         if (skill.enabled) this.#skills.set(skill.name, skill);
       }
+      this.rebuildSkillMatcher();
       const errors = entry?.errors ?? [];
       if (errors.length > 0) {
         return errors.map((error) => `${error.path}: ${error.message}`).join("; ");
@@ -353,6 +352,25 @@ export class CodexRuntimeService {
     } catch (error) {
       return errorMessage(error);
     }
+  }
+
+  /** Precompute the skill-mention lookup and pattern; they change only when skills do. */
+  private rebuildSkillMatcher(): void {
+    this.#skillsByLowerName = new Map(
+      [...this.#skills.values()].map((skill) => [skill.name.toLowerCase(), skill] as const),
+    );
+    if (this.#skills.size === 0) {
+      this.#skillMentionPattern = undefined;
+      return;
+    }
+    const alternatives = [...this.#skills.keys()]
+      .sort((left, right) => right.length - left.length)
+      .map(escapeRegExp)
+      .join("|");
+    this.#skillMentionPattern = new RegExp(
+      `(^|[^A-Za-z0-9_])\\$(${alternatives})(?=$|[^A-Za-z0-9_:-])`,
+      "gi",
+    );
   }
 
   private async readConfig(): Promise<ConfigReadResponse> {
@@ -396,12 +414,7 @@ export class CodexRuntimeService {
   }
 
   private serialize<Result>(operation: () => Promise<Result>): Promise<Result> {
-    const result = this.#operationTail.then(operation, operation);
-    this.#operationTail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
+    return this.#operations.run("runtime", operation);
   }
 }
 
@@ -477,23 +490,6 @@ function settingsFromConfig(config: Config): EffectiveCodexSettings {
 
 function isPersonality(value: unknown): value is Personality {
   return value === "none" || value === "friendly" || value === "pragmatic";
-}
-
-type BaseUserLayer = ConfigLayer & {
-  readonly name: Extract<ConfigLayerSource, { readonly type: "user" }>;
-};
-
-function findBaseUserLayer(layers: readonly ConfigLayer[] | null): BaseUserLayer | undefined {
-  return layers?.find(
-    (layer): layer is BaseUserLayer => layer.name.type === "user" && layer.name.profile === null,
-  );
-}
-
-function isTransportUnavailable(error: unknown): boolean {
-  return (
-    error instanceof BridgeError &&
-    (error.code === "CODEX_NOT_RUNNING" || error.code === "CODEX_EXITED")
-  );
 }
 
 function escapeRegExp(value: string): string {

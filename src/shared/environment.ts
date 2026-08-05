@@ -1,10 +1,4 @@
-const bridgeOnlyEnvironmentKeys = new Set([
-  "PUBLIC_URL",
-  "TELEGRAM_ALLOWED_USER_IDS",
-  "TELEGRAM_API_BASE",
-  "TELEGRAM_BOT_TOKEN",
-  "TELEGRAM_POLL_TIMEOUT",
-]);
+import { bridgeOnlyEnvironmentKeys } from "../config/env.js";
 
 /** Build an environment for Codex/npm subprocesses without bridge credentials. */
 export function externalProcessEnvironment(

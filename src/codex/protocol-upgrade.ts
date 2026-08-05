@@ -3,7 +3,12 @@ import { cp, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { externalProcessEnvironment } from "../shared/environment.js";
-import { atomicWriteFile, atomicWriteJson, ensureDirectory } from "../shared/fs.js";
+import {
+  atomicWriteFile,
+  atomicWriteJson,
+  ensureDirectory,
+  readFileIfExists,
+} from "../shared/fs.js";
 import type { Logger } from "../shared/logger.js";
 import { runCommand } from "../shared/process.js";
 import { CodexToolchainManager, readPinnedCodexVersion } from "./toolchain.js";
@@ -127,7 +132,7 @@ export async function checkCodexProtocol(
   }
 }
 
-export async function createProtocolManifest(
+async function createProtocolManifest(
   codexVersion: string,
   bindingsDirectory: string,
 ): Promise<ProtocolManifest> {
@@ -286,7 +291,7 @@ async function applyProtocol(
   const backup = join(generatedRoot, `.codex.backup.${transactionId}`);
   const versionPath = join(projectRoot, "codex.version");
   const manifestPath = join(incoming, "protocol-manifest.json");
-  const oldVersion = await readOptionalFile(versionPath);
+  const oldVersion = await readFileIfExists(versionPath);
   let movedCurrent = false;
   let installedIncoming = false;
 
@@ -320,15 +325,6 @@ async function applyProtocol(
 async function restoreOptionalFile(path: string, contents: string | undefined): Promise<void> {
   if (contents === undefined) await rm(path, { force: true });
   else await atomicWriteFile(path, contents);
-}
-
-async function readOptionalFile(path: string): Promise<string | undefined> {
-  try {
-    return await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
 }
 
 async function pathExists(path: string): Promise<boolean> {

@@ -8,6 +8,7 @@ import type {
   RichText,
 } from "grammy/types";
 import { assertNever } from "../../shared/errors.js";
+import { capitalize, truncate } from "../../shared/text.js";
 
 export interface TelegramFileReference {
   readonly fileId: string;
@@ -37,6 +38,8 @@ function formatBytes(bytes: number): string {
 
 export interface NormalizedTelegramMessage {
   readonly text: string;
+  /** True when `text` is synthesized filler (a media placeholder), not user words. */
+  readonly syntheticText: boolean;
   readonly files: readonly TelegramFileReference[];
 }
 
@@ -53,6 +56,8 @@ interface FileLike {
 interface NormalizeState {
   readonly files: TelegramFileReference[];
   readonly fileIds: Set<string>;
+  /** Media-placeholder line emitted for the top-level message, when one was. */
+  currentPlaceholder: string | undefined;
 }
 
 const NATIVE_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
@@ -98,6 +103,7 @@ export function normalizeTelegramMessage(
   const state: NormalizeState = {
     files: [],
     fileIds: new Set(),
+    currentPlaceholder: undefined,
   };
   const lines: string[] = [];
   for (const reference of referenceMessages) {
@@ -106,8 +112,12 @@ export function normalizeTelegramMessage(
     lines.push(...indent(describeMessage(reference, state, "reference")));
   }
   lines.push(...describeMessage(message, state, "current"));
-  const text = cleanLines(lines).join("\n").trim() || "[Telegram message]";
-  return { text, files: state.files };
+  const joined = cleanLines(lines).join("\n").trim();
+  return {
+    text: joined || "[Telegram message]",
+    syntheticText: joined.length === 0 || joined === state.currentPlaceholder,
+    files: state.files,
+  };
 }
 
 function describeMessage(message: Message, state: NormalizeState, context: ContextKind): string[] {
@@ -248,7 +258,11 @@ function describePayload(message: Message, state: NormalizeState, context: Conte
   if (message.checklist !== undefined) lines.push(...checklistSummary(message.checklist));
   if (message.game !== undefined) lines.push(...gameSummary(message.game, state, context));
 
-  if (!hasWords && mediaLabels.length > 0) lines.push(`[${mediaLabels.join(", ")}]`);
+  if (!hasWords && mediaLabels.length > 0) {
+    const placeholder = `[${mediaLabels.join(", ")}]`;
+    if (context === "current") state.currentPlaceholder = placeholder;
+    lines.push(placeholder);
+  }
   return cleanLines(lines);
 }
 
@@ -294,37 +308,38 @@ function describePollMedia(
       media.animation,
       animationName(media.animation),
     );
-    return [`${titleCase(label)} media: animation`];
+    return [`${capitalize(label)} media: animation`];
   }
   if (media.audio !== undefined) {
     addStandardFile(state, context, `${label} audio`, media.audio, audioName(media.audio));
-    return [`${titleCase(label)} media: audio`];
+    return [`${capitalize(label)} media: audio`];
   }
   if (media.document !== undefined) {
     addStandardFile(state, context, `${label} document`, media.document, "poll-document.bin");
-    return [`${titleCase(label)} media: document`];
+    return [`${capitalize(label)} media: document`];
   }
   if (media.live_photo !== undefined) {
     addLivePhoto(state, context, media.live_photo, `${label} live photo`);
-    return [`${titleCase(label)} media: live photo`];
+    return [`${capitalize(label)} media: live photo`];
   }
   if (media.photo !== undefined) {
     addPhoto(state, context, `${label} photo`, media.photo);
-    return [`${titleCase(label)} media: photo`];
+    return [`${capitalize(label)} media: photo`];
   }
   if (media.sticker !== undefined) {
     addSticker(state, context, media.sticker, `${label} sticker`);
-    return [`${titleCase(label)} media: ${stickerSummary(media.sticker)}`];
+    return [`${capitalize(label)} media: ${stickerSummary(media.sticker)}`];
   }
   if (media.video !== undefined) {
     addStandardFile(state, context, `${label} video`, media.video, "poll-video.mp4");
-    return [`${titleCase(label)} media: video`];
+    return [`${capitalize(label)} media: video`];
   }
-  if (media.venue !== undefined) return [`${titleCase(label)} media: ${venueSummary(media.venue)}`];
+  if (media.venue !== undefined)
+    return [`${capitalize(label)} media: ${venueSummary(media.venue)}`];
   if (media.location !== undefined) {
-    return [`${titleCase(label)} media: ${locationSummary(media.location)}`];
+    return [`${capitalize(label)} media: ${locationSummary(media.location)}`];
   }
-  if (media.link !== undefined) return [`${titleCase(label)} link: ${media.link.url}`];
+  if (media.link !== undefined) return [`${capitalize(label)} link: ${media.link.url}`];
   return [];
 }
 
@@ -481,7 +496,7 @@ function contactSummary(contact: NonNullable<Message["contact"]>): string {
   const name = [contact.first_name, contact.last_name].filter(Boolean).join(" ");
   const details = [`Contact: ${name} — ${contact.phone_number}`];
   if (contact.user_id !== undefined) details.push(`Telegram user #${contact.user_id}`);
-  if (contact.vcard) details.push(`vCard: ${clip(contact.vcard.replaceAll("\n", " "), 500)}`);
+  if (contact.vcard) details.push(`vCard: ${truncate(contact.vcard.replaceAll("\n", " "), 500)}`);
   return details.join("; ");
 }
 
@@ -628,7 +643,7 @@ function describeRemainder(message: Message): string[] {
     const json = JSON.stringify(value, (nested, child: unknown) =>
       nested === "passport_data" ? undefined : child,
     );
-    lines.push(clip(`${titleCase(humanize(key))}${value === true ? "" : `: ${json}`}.`, 200));
+    lines.push(truncate(`${capitalize(humanize(key))}${value === true ? "" : `: ${json}`}.`, 200));
   }
   return lines;
 }
@@ -757,12 +772,4 @@ function indent(lines: readonly string[]): string[] {
 
 function humanize(value: string): string {
   return value.replaceAll("_", " ").replace(/\s+/g, " ").trim();
-}
-
-function titleCase(value: string): string {
-  return value.length === 0 ? value : `${value[0]?.toUpperCase()}${value.slice(1)}`;
-}
-
-function clip(value: string, length: number): string {
-  return value.length <= length ? value : `${value.slice(0, Math.max(0, length - 1))}…`;
 }

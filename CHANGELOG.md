@@ -8,6 +8,12 @@ Initial Wirebot release, forked from [Telex](https://github.com/sadfun/telex) 0.
 
 ### Added
 
+- Headless Codex authentication from the environment: `CODEX_CHATGPT_TOKEN` signs in with a
+  ChatGPT access token (workspace id derived from the token's claims, `CODEX_CHATGPT_ACCOUNT_ID`
+  as an override; voice transcription included), and `CODEX_API_KEY` signs in with an OpenAI API
+  key. Either is applied on every start; when unset, the interactive ChatGPT device-code `/login`
+  flow is unchanged. Secrets are delivered over the app-server control channel and stripped from
+  agent subprocess environments.
 - `/compact` through Codex app-server's native compaction turn, with busy protection and visible
   progress for both manual and Codex-triggered automatic context compaction.
 - An authenticated **Schedules** Mini App tab for viewing, creating, editing, pausing, resuming,
@@ -28,7 +34,7 @@ Initial Wirebot release, forked from [Telex](https://github.com/sadfun/telex) 0.
 - Deployment is an Ubuntu-based container image published to GHCR for `linux/amd64` and `linux/arm64`. The image bundles a rich agent toolset (git, python3, build-essential, ffmpeg, imagemagick, and more), and updating means pulling a new image; a single `/data` volume preserves the workspace, the agent home directory, `/usr/local`, an optional Homebrew prefix, and all Codex state across updates. Codex is told this persistence contract on every turn.
 - Inside the container the agent runs as an unprivileged user with passwordless sudo, Wirebot is PID 1 under tini, and Codex's default sandbox is `danger-full-access` — the container boundary is the sandbox. Source runs keep the `workspace-write` default.
 - The runtime is Bun: releases are a single compiled executable built with bytecode compilation, minification, and embedded sourcemaps; the app version and Codex pin embed at build time; the Mini App client bundles with `Bun.build`.
-- The pinned Codex CLI installs from the npm registry's platform tarball, verified against the registry integrity digest, and Wirebot spawns the native vendored binary directly — Node and npm are no longer needed anywhere. Pinned toolchains (Codex, cloudflared, curl-impersonate) are baked into the image; source runs still download them on demand. Install markers record the platform target so a data volume cannot serve wrong-architecture binaries.
+- The pinned Codex CLI installs from the npm registry's platform tarball, verified against the registry integrity digest, and Wirebot spawns the native vendored binary directly — Node and npm are no longer needed anywhere. Pinned toolchains (Codex, cloudflared, curl-impersonate) are baked into the image. At runtime only the Codex CLI is downloaded on demand; cloudflared and curl-impersonate are invoked from PATH (the image bakes the pinned builds into a PATH directory), and when absent Wirebot degrades gracefully — no quick tunnel, and voice messages are forwarded untranscribed. Install markers record the platform target so a data volume cannot serve wrong-architecture binaries.
 - The pinned voice transport is curl-impersonate 2.0.0 (curl 8.21.0).
 
 ### Fixed
