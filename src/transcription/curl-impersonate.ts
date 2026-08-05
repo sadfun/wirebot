@@ -53,15 +53,22 @@ export function curlImpersonateAssetFor(
   return assets[`${platform}-${arch}`];
 }
 
-/** Downloads and verifies the pinned curl-impersonate build on first use. */
+/**
+ * Downloads and verifies the pinned curl-impersonate build on first use.
+ * A target other than the host is only used when baking container images.
+ */
 export async function ensureCurlImpersonate(
   toolchainsDirectory: string,
   logger: Logger,
+  target: { readonly platform: string; readonly arch: string } = {
+    platform: process.platform,
+    arch: process.arch,
+  },
 ): Promise<string> {
-  const asset = curlImpersonateAssetFor();
+  const asset = curlImpersonateAssetFor(target.platform, target.arch);
   if (asset === undefined) {
     throw new BridgeError(
-      `Voice transcription is not supported on ${process.platform}-${process.arch}`,
+      `Voice transcription is not supported on ${target.platform}-${target.arch}`,
       "TRANSCRIPTION_UNSUPPORTED_PLATFORM",
     );
   }

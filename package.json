@@ -1,6 +1,6 @@
 {
   "name": "wirebot",
-  "version": "0.0.28",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Wirebot — a Telegram bridge for the OpenAI Codex app-server.",

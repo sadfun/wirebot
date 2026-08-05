@@ -1,0 +1,13 @@
+.git
+.github
+.idea
+.wirebot
+.env
+node_modules
+dist
+test
+coverage
+*.md
+*.log
+*.profraw
+docker-compose.yml

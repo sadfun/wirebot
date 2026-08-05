@@ -1,0 +1,18 @@
+services:
+  wirebot:
+    image: ghcr.io/sadfun/wirebot:latest
+    restart: unless-stopped
+    # TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USER_IDS are required; see
+    # .env.example for everything else (PUBLIC_URL, WIREBOT_TUNNEL, ...).
+    env_file: .env
+    volumes:
+      # One volume holds all user state: the Codex workspace and login, the
+      # agent home directory, /usr/local, and an optional Homebrew prefix.
+      - wirebot-data:/data
+    ports:
+      # Only needed when PUBLIC_URL reverse-proxies to the Mini App server.
+      # With the default TryCloudflare quick tunnel no port needs publishing.
+      - "127.0.0.1:8787:8787"
+
+volumes:
+  wirebot-data:

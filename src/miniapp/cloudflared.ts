@@ -81,21 +81,27 @@ async function cloudflaredOnPath(): Promise<string | undefined> {
  * Returns a cloudflared binary path: the one on PATH when present, otherwise
  * a pinned, checksum-verified download into the app-owned toolchains
  * directory. Throws when the platform is unsupported or the download fails.
+ * A target other than the host is only used when baking container images;
+ * it skips the PATH lookup so the image always carries the pinned build.
  */
 export async function ensureCloudflared(
   toolchainsDirectory: string,
   logger: Logger,
+  target?: { readonly platform: string; readonly arch: string },
 ): Promise<string> {
-  const existing = await cloudflaredOnPath();
-  if (existing !== undefined) {
-    logger.debug("Using cloudflared from PATH", { path: existing });
-    return existing;
+  if (target === undefined) {
+    const existing = await cloudflaredOnPath();
+    if (existing !== undefined) {
+      logger.debug("Using cloudflared from PATH", { path: existing });
+      return existing;
+    }
   }
 
-  const asset = cloudflaredAssetFor();
+  const { platform, arch } = target ?? { platform: process.platform, arch: process.arch };
+  const asset = cloudflaredAssetFor(platform, arch);
   if (asset === undefined) {
     throw new BridgeError(
-      `No pinned cloudflared build for ${process.platform}-${process.arch}; install cloudflared manually`,
+      `No pinned cloudflared build for ${platform}-${arch}; install cloudflared manually`,
       "CLOUDFLARED_UNSUPPORTED_PLATFORM",
     );
   }
