@@ -170,7 +170,7 @@ export async function runWirebot(): Promise<void> {
         });
       } catch (error) {
         logger.warn(
-          "No PUBLIC_URL and no quick tunnel; the settings Mini App is disabled. Set PUBLIC_URL, or set WIREBOT_TUNNEL=auto with network access to GitHub releases.",
+          "The quick tunnel failed to start and no PUBLIC_URL is set; the settings Mini App is disabled. Set PUBLIC_URL, or check outbound network access to Cloudflare.",
           { error: errorMessage(error) },
         );
       }
