@@ -1,6 +1,5 @@
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { ScheduledRunsEngine } from "./automations/engine.js";
 import { AutomationStore } from "./automations/store.js";
 import { TelegramChannel } from "./channels/telegram/channel.js";
@@ -8,7 +7,7 @@ import { CodexConfigService } from "./codex/config-service.js";
 import { CodexAppServer } from "./codex/rpc.js";
 import { CodexRuntimeService } from "./codex/runtime-service.js";
 import { CodexService } from "./codex/service.js";
-import { CodexToolchainManager, readPinnedCodexVersion } from "./codex/toolchain.js";
+import { CodexToolchainManager, pinnedCodexVersion } from "./codex/toolchain.js";
 import { loadAppConfig } from "./config/env.js";
 import { CodexBridge } from "./core/bridge.js";
 import { ConversationStore } from "./core/conversation-store.js";
@@ -20,7 +19,7 @@ import { deferred } from "./shared/async.js";
 import { errorMessage } from "./shared/errors.js";
 import { atomicWriteFile, ensureDirectory } from "./shared/fs.js";
 import { Logger } from "./shared/logger.js";
-import { readWirebotVersion } from "./shared/version.js";
+import { wirebotVersion } from "./shared/version.js";
 import { ChatGptVoiceTranscriber } from "./transcription/service.js";
 import { CurlImpersonateTransport } from "./transcription/transport.js";
 
@@ -40,11 +39,10 @@ export async function runWirebot(): Promise<void> {
   const config = loadAppConfig();
   const logger = new Logger(config.logLevel, { service: "wirebot" });
   const shutdown = shutdownSignal(logger);
-  const projectRoot = fileURLToPath(new URL("../", import.meta.url));
-  const bridgeVersion = await readWirebotVersion(projectRoot);
   const codexHome = join(config.dataDirectory, "codex-home");
   const outboundDirectory = join(config.dataDirectory, "outbound");
-  const toolchainsDirectory = join(config.dataDirectory, "toolchains");
+  const toolchainsDirectory =
+    config.toolchainsDirectory ?? join(config.dataDirectory, "toolchains");
   const statePath = join(config.dataDirectory, "conversations.json");
   const settingsPath = join(config.dataDirectory, "settings.json");
   const automationsPath = join(config.dataDirectory, "automations.json");
@@ -59,18 +57,17 @@ export async function runWirebot(): Promise<void> {
     ]);
     await ensureDefaultCodexConfig(join(codexHome, "config.toml"));
 
-    const pinnedVersion = await readPinnedCodexVersion(projectRoot);
     const toolchains = new CodexToolchainManager(
       toolchainsDirectory,
       logger.child({ component: "toolchain" }),
     );
-    const binaryPath = await toolchains.ensureVersion(pinnedVersion);
+    const binaryPath = await toolchains.ensureVersion(pinnedCodexVersion);
 
     const rpc = new CodexAppServer(
       binaryPath,
       config.workspace,
       codexHome,
-      bridgeVersion,
+      wirebotVersion,
       logger.child({ component: "codex-rpc" }),
     );
     resources.push(rpc);
@@ -139,6 +136,7 @@ export async function runWirebot(): Promise<void> {
       runtime,
       settings,
       logger: logger.child({ component: "miniapp" }),
+      ...(config.assetsDirectory === undefined ? {} : { assetDirectory: config.assetsDirectory }),
     });
     resources.push(miniApp);
     await miniApp.start();
@@ -198,8 +196,8 @@ export async function runWirebot(): Promise<void> {
     await scheduledRuns.start();
 
     logger.info("Wirebot is ready", {
-      version: bridgeVersion,
-      codexVersion: pinnedVersion,
+      version: wirebotVersion,
+      codexVersion: pinnedCodexVersion,
       workspace: config.workspace,
       miniApp: `${config.host}:${config.port}`,
     });

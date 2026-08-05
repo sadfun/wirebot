@@ -1,10 +1,10 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 import { checkCodexProtocol, formatProtocolCheck } from "../codex/protocol-upgrade.js";
 import { errorMessage } from "../shared/errors.js";
 import { projectRootFrom } from "../shared/fs.js";
 import { Logger } from "../shared/logger.js";
-import { readWirebotVersion } from "../shared/version.js";
+import { wirebotVersion } from "../shared/version.js";
 
 interface CodexCheckArguments {
   readonly version: string;
@@ -34,11 +34,18 @@ async function main(args: readonly string[]): Promise<number> {
     }
     case "version": {
       if (args.length !== 1) throw new Error(usage);
-      console.log(await readWirebotVersion(projectRootFrom(import.meta.url)));
+      console.log(wirebotVersion);
       return 0;
     }
-    case "codex":
+    case "codex": {
+      // Compiled release binaries do not carry the repository checkout.
+      if (typeof WIREBOT_COMPILED !== "undefined") {
+        throw new Error(
+          "wirebot codex check is a maintainer command; run it from a source checkout.",
+        );
+      }
       return await checkCodex(parseCodexArguments(args));
+    }
     default:
       throw new Error(usage);
   }
@@ -80,9 +87,13 @@ function parseCodexArguments(args: readonly string[]): CodexCheckArguments {
   return { version, apply };
 }
 
-try {
-  process.exitCode = await main(process.argv.slice(2));
-} catch (error) {
-  console.error(errorMessage(error));
-  process.exitCode = 1;
-}
+// No top-level await: bytecode compilation requires a CommonJS-representable entry.
+main(process.argv.slice(2)).then(
+  (code) => {
+    process.exitCode = code;
+  },
+  (error: unknown) => {
+    console.error(errorMessage(error));
+    process.exitCode = 1;
+  },
+);

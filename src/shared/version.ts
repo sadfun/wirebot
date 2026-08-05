@@ -1,10 +1,4 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { z } from "zod";
+import { version } from "../../package.json";
 
-const packageSchema = z.object({ version: z.string().min(1) });
-
-export async function readWirebotVersion(projectRoot: string): Promise<string> {
-  const contents = await readFile(join(projectRoot, "package.json"), "utf8");
-  return packageSchema.parse(JSON.parse(contents)).version;
-}
+/** The Wirebot version, embedded from package.json at build time. */
+export const wirebotVersion: string = version;

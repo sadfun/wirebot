@@ -69,7 +69,8 @@ export class MiniAppServer {
   public constructor(options: MiniAppServerOptions) {
     this.options = options;
     this.#assetDirectory =
-      options.assetDirectory ?? fileURLToPath(new URL("./public", import.meta.url));
+      options.assetDirectory ??
+      fileURLToPath(new URL("../../dist/miniapp/public", import.meta.url));
     this.#server = createServer((request, response) => {
       void this.handle(request, response).catch((error: unknown) => {
         this.options.logger.error("Mini App request failed", error, {

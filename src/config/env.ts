@@ -13,6 +13,8 @@ const envSchema = z.object({
     .optional(),
   WIREBOT_TUNNEL: z.enum(["auto", "off"]).default("auto"),
   WIREBOT_DATA_DIR: z.string().min(1).default(".wirebot"),
+  WIREBOT_TOOLCHAINS_DIR: z.string().min(1).optional(),
+  WIREBOT_ASSETS_DIR: z.string().min(1).optional(),
   CODEX_WORKSPACE: z.string().min(1).default(".wirebot/workspace"),
   HOST: z.string().min(1).default("127.0.0.1"),
   PORT: z.coerce.number().int().min(1).max(65_535).default(8787),
@@ -27,6 +29,8 @@ interface AppConfig {
   readonly publicUrl: string | undefined;
   readonly tunnelMode: "auto" | "off";
   readonly dataDirectory: string;
+  readonly toolchainsDirectory: string | undefined;
+  readonly assetsDirectory: string | undefined;
   readonly workspace: string;
   readonly host: string;
   readonly port: number;
@@ -49,6 +53,12 @@ export function loadAppConfig(environment: NodeJS.ProcessEnv = process.env): App
     publicUrl: parsed.PUBLIC_URL?.replace(/\/$/, ""),
     tunnelMode: parsed.WIREBOT_TUNNEL,
     dataDirectory: resolve(parsed.WIREBOT_DATA_DIR),
+    toolchainsDirectory:
+      parsed.WIREBOT_TOOLCHAINS_DIR === undefined
+        ? undefined
+        : resolve(parsed.WIREBOT_TOOLCHAINS_DIR),
+    assetsDirectory:
+      parsed.WIREBOT_ASSETS_DIR === undefined ? undefined : resolve(parsed.WIREBOT_ASSETS_DIR),
     workspace: resolve(parsed.CODEX_WORKSPACE),
     host: parsed.HOST,
     port: parsed.PORT,
