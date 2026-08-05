@@ -2,7 +2,7 @@
 
 All notable changes to Wirebot are documented in this file.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-08-05
 
 Initial Wirebot release, forked from [Telex](https://github.com/sadfun/telex) 0.0.28 and synced with Telex through 0.0.34. The bridge behavior — conversations, scheduled runs, voice transcription, media handling, the settings Mini App — carries over; the product, runtime, and deployment model are new.
 
