@@ -30,7 +30,7 @@ ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      tini ca-certificates curl wget git git-lfs gh openssh-client gnupg \
+      tini ca-certificates curl wget git git-lfs openssh-client gnupg \
       sudo locales tzdata file less procps psmisc htop \
       nano vim-tiny \
       unzip zip tar gzip bzip2 xz-utils zstd \
