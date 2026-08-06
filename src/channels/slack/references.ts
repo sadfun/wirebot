@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ProviderReference } from "../../core/channel.js";
+import { decodeBase64UrlJson } from "../../shared/text.js";
 
 const slackChannelTypeSchema = z.enum(["im", "mpim", "group", "channel"]);
 
@@ -76,5 +77,5 @@ function encodeReference(value: unknown): string {
 }
 
 function decodeReference(value: string): unknown {
-  return JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  return decodeBase64UrlJson(value);
 }

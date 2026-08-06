@@ -234,13 +234,9 @@ export async function runWirebot(): Promise<void> {
       runtime,
       scheduledRuns,
     );
-    if (telegram !== undefined) {
-      resources.push(telegram);
-      await telegram.start(bridge.handleMessage);
-    }
-    if (slack !== undefined) {
-      resources.push(slack);
-      await slack.start(bridge.handleMessage);
+    for (const channel of channels) {
+      resources.push(channel);
+      await channel.start(bridge.handleMessage);
     }
     resources.push(scheduledRuns);
     await scheduledRuns.start();

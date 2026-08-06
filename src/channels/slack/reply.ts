@@ -85,6 +85,7 @@ export type SlackChoiceRequester = (
   userId: string,
   prompt: string,
   options: readonly ChoiceOption[],
+  signal?: AbortSignal,
 ) => Promise<string>;
 
 /**
@@ -250,7 +251,7 @@ export class SlackResponder implements MessageResponder {
   }
 
   public async sendText(text: string, options?: SendOptions): Promise<void> {
-    this.#logger.info("Slack reply", { text: truncateForLog(text) });
+    this.#logger.info("Slack reply", { chars: text.length });
     const chunks = splitMessageText(markdownToMrkdwn(text), slackTextLimit);
     let posted = 0;
     try {
@@ -282,8 +283,19 @@ export class SlackResponder implements MessageResponder {
     }
   }
 
-  public async askChoice(prompt: string, options: readonly ChoiceOption[]): Promise<string> {
-    return await this.#requestChoice(this.#channel, this.#threadTs, this.#userId, prompt, options);
+  public async askChoice(
+    prompt: string,
+    options: readonly ChoiceOption[],
+    signal?: AbortSignal,
+  ): Promise<string> {
+    return await this.#requestChoice(
+      this.#channel,
+      this.#threadTs,
+      this.#userId,
+      prompt,
+      options,
+      signal,
+    );
   }
 
   private async respondThroughWebhook(text: string): Promise<void> {
@@ -369,13 +381,13 @@ export class SlackReplyStream implements OutboundStream {
     // Mirror the run into stdout: every tool call once, and reasoning
     // summaries as they change.
     for (const action of progress.actions.slice(this.#loggedActions)) {
-      this.#logger.info("Codex tool call", { action: action.label });
+      this.#logger.debug("Codex tool call", { action: action.label });
     }
     this.#loggedActions = Math.max(this.#loggedActions, progress.actions.length);
     const reasoning = (progress.summary ?? progress.message)?.trim();
     if (reasoning !== undefined && reasoning.length > 0 && reasoning !== this.#lastReasoning) {
       this.#lastReasoning = reasoning;
-      this.#logger.info("Codex reasoning", { text: truncateForLog(reasoning, 600) });
+      this.#logger.debug("Codex reasoning", { text: truncateForLog(reasoning, 600) });
     }
     this.#progress = progress;
     this.scheduleDraft();
@@ -417,7 +429,6 @@ export class SlackReplyStream implements OutboundStream {
     if (text.length > 0) {
       this.#logger.info("Codex answer delivered", {
         chars: text.length,
-        text: truncateForLog(text),
       });
     }
     const chunks =

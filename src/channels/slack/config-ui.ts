@@ -167,7 +167,7 @@ export function overviewScreen(
     .slice(0, 3);
   const header = [
     "*Codex settings*",
-    ...(status === undefined ? [] : [escapeSlackEntities(status).replace(/^⚠️|^✅/u, (m) => m)]),
+    ...(status === undefined ? [] : [escapeSlackEntities(status)]),
     ...lines,
     ...warnings,
     "_Everyone using this Wirebot shares these settings._",

@@ -62,6 +62,26 @@ export const botCommands: readonly {
   { command: "help", menuDescription: "Show commands", help: "show this help" },
 ];
 
+/** Commands that act on one conversation rather than the whole Wirebot instance. */
+export const conversationScopedCommands: ReadonlySet<string> = new Set([
+  "new",
+  "back",
+  "stop",
+  "compact",
+  "schedules",
+  // Internal action used by scheduled-run notification buttons.
+  "continue",
+]);
+
+/** Commands that change shared instance state and require provider-admin gating. */
+export const instanceAdminCommands: ReadonlySet<string> = new Set([
+  "config",
+  "login",
+  "logout",
+  "reload",
+  "restart",
+]);
+
 const helpText = [
   "Send me a message to work with Codex in this conversation.",
   "",
@@ -72,6 +92,8 @@ const readyText =
   'Try something like "explain what this project does", or send /help for all commands.';
 
 const loginCodeTtl = 15 * 60 * 1_000;
+
+type SignInDecision = "ready" | "deferred" | "rejected";
 
 export interface CodexRuntimeCommand {
   status(): CodexRuntimeStatus;
@@ -96,11 +118,16 @@ export class CodexBridge {
   #signedInConfirmed = false;
 
   public readonly handleMessage: MessageHandler = async (message) => {
+    let deferred = false;
     try {
       // Command parsing is owned by the channel; the bridge trusts message.command.
       const command = message.command;
       if (command === undefined) {
-        if (!(await this.ensureSignedIn(message))) return;
+        const signIn = await this.ensureSignedIn(message);
+        if (signIn !== "ready") {
+          deferred = signIn === "deferred";
+          return;
+        }
         await this.runUserTurn(message);
         return;
       }
@@ -111,6 +138,8 @@ export class CodexBridge {
         conversation: message.address.key,
       });
       await message.responder.sendText(`Codex error: ${errorMessage(error)}`);
+    } finally {
+      if (!deferred) await this.disposeMessage(message);
     }
   };
 
@@ -365,14 +394,14 @@ export class CodexBridge {
     );
   }
 
-  private async ensureSignedIn(message: InboundMessage): Promise<boolean> {
-    if (this.#signedInConfirmed) return true;
+  private async ensureSignedIn(message: InboundMessage): Promise<SignInDecision> {
+    if (this.#signedInConfirmed) return "ready";
     const status = await this.#codex.account().catch(() => undefined);
     // If the status check itself fails, run the turn anyway so the real error surfaces.
-    if (status === undefined) return true;
+    if (status === undefined) return "ready";
     if (!needsLogin(status)) {
       this.#signedInConfirmed = true;
-      return true;
+      return "ready";
     }
     if (isPrivate(message)) {
       await this.sendLogin(
@@ -381,12 +410,13 @@ export class CodexBridge {
         "Almost there — I need you to sign in to ChatGPT before I can work on that. I'll start on your message as soon as you're in.",
         message,
       );
+      return "deferred";
     } else {
       await message.responder.sendText(
         "Codex isn't signed in yet. Open a private chat with me and send /start to set it up.",
       );
+      return "rejected";
     }
-    return false;
   }
 
   private async handleLoginCompleted(
@@ -417,6 +447,8 @@ export class CodexBridge {
         }
       } catch (error) {
         this.#logger.error("Could not deliver sign-in confirmation", error);
+      } finally {
+        if (pending.resume !== undefined) await this.disposeMessage(pending.resume);
       }
     }
   }
@@ -430,22 +462,22 @@ export class CodexBridge {
     const prefix = intro === undefined ? "" : `${intro}\n\n`;
     switch (login.type) {
       case "chatgptDeviceCode":
-        this.registerPendingLogin(login.loginId, responder, resume);
         await responder.sendText(
           `${prefix}Tap the button below and enter this one-time code on the sign-in page:\n\n${login.userCode}\n\nI'll confirm here the moment you're in.`,
           {
             button: { label: "Open sign-in", kind: "url", url: login.verificationUrl },
           },
         );
+        this.registerPendingLogin(login.loginId, responder, resume);
         return;
       case "chatgpt":
-        this.registerPendingLogin(login.loginId, responder, resume);
         await responder.sendText(
           `${prefix}Open the sign-in page to continue. I'll confirm here the moment you're in.`,
           {
             button: { label: "Open sign-in", kind: "url", url: login.authUrl },
           },
         );
+        this.registerPendingLogin(login.loginId, responder, resume);
         return;
       case "apiKey":
         await responder.sendText("Codex is configured to use an API key.");
@@ -461,8 +493,16 @@ export class CodexBridge {
     resume?: InboundMessage,
   ): void {
     const existing = this.#pendingLogins.get(loginId);
-    if (existing !== undefined) clearTimeout(existing.timer);
-    const timer = setTimeout(() => this.#pendingLogins.delete(loginId), loginCodeTtl);
+    if (existing !== undefined) {
+      clearTimeout(existing.timer);
+      if (existing.resume !== undefined) void this.disposeMessage(existing.resume);
+    }
+    const timer = setTimeout(() => {
+      const expired = this.#pendingLogins.get(loginId);
+      if (expired?.timer !== timer) return;
+      this.#pendingLogins.delete(loginId);
+      if (expired.resume !== undefined) void this.disposeMessage(expired.resume);
+    }, loginCodeTtl);
     timer.unref();
     this.#pendingLogins.set(loginId, {
       responder,
@@ -480,6 +520,16 @@ export class CodexBridge {
       taken.push(pending);
     }
     return taken;
+  }
+
+  private async disposeMessage(message: InboundMessage): Promise<void> {
+    await message.dispose?.().catch((error: unknown) => {
+      this.#logger.debug("Could not release inbound message resources", {
+        channel: message.address.channel,
+        conversation: message.address.key,
+        error: errorMessage(error),
+      });
+    });
   }
 
   private async requirePrivateChat(message: InboundMessage): Promise<boolean> {

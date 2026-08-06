@@ -3,6 +3,11 @@ import { join } from "node:path";
 import { SocketModeClient } from "@slack/socket-mode";
 import { LogLevel, WebClient } from "@slack/web-api";
 import type { SlackConfig } from "../../config/env.js";
+import {
+  botCommands,
+  conversationScopedCommands,
+  instanceAdminCommands,
+} from "../../core/bridge.js";
 import type {
   ChoiceOption,
   DeliveryReceipt,
@@ -42,22 +47,11 @@ import {
   type SlackChoiceRequester,
   type SlackMessagingApi,
   SlackResponder,
-  truncateForLog,
 } from "./reply.js";
 
-export const slackSlashCommandHelp = [
-  "`/wirebot start` — show setup and sign-in help",
-  "`/wirebot new` — start a fresh Codex task",
-  "`/wirebot back` — return to the previous Codex task",
-  "`/wirebot stop` — stop the running turn",
-  "`/wirebot compact` — compact Codex context",
-  "`/wirebot schedules` — list scheduled runs",
-  "`/wirebot status` — show Codex status",
-  "`/wirebot login` / `/wirebot logout` — manage the ChatGPT sign-in",
-  "`/wirebot config` — open Codex settings",
-  "`/wirebot reload` / `/wirebot restart` — refresh or restart Codex",
-  "`/wirebot help` — show commands",
-].join("\n");
+export const slackSlashCommandHelp = botCommands
+  .map((entry) => `\`/wirebot ${entry.command}\` — ${entry.help}`)
+  .join("\n");
 
 interface SocketEnvelope {
   readonly ack: (response?: unknown) => Promise<void>;
@@ -111,20 +105,7 @@ const membershipCacheLimit = 1_000;
 const membershipCacheTtlMs = 10 * 60 * 1_000;
 const webhookTimeoutMs = 10_000;
 
-/** Commands that act on one conversation and therefore need a thread in channels. */
-const conversationScopedCommands = new Set([
-  "new",
-  "back",
-  "stop",
-  "compact",
-  "schedules",
-  "continue",
-]);
-
-/** Commands that change this Wirebot instance for everyone using it. */
-const adminCommands = new Set(["config", "login", "logout", "reload", "restart"]);
-
-/** Mirror of the bridge's plain-text command parser, for gating before dispatch. */
+/** Parse mention-stripped text before handing the provider-owned command to the bridge. */
 function parseTextCommand(text: string): Readonly<{ name: string; args: string }> | undefined {
   const match = /^\/([a-z][a-z0-9_]*)(?:@[a-z0-9_]+)?(?:[ \t]+([^\r\n]*))?$/i.exec(text.trim());
   const name = match?.[1];
@@ -207,12 +188,12 @@ export class SlackChannel implements MessagingChannel {
     if (this.#allowAllWorkspaceMembers && this.#botTeamId === undefined) {
       throw new Error("Slack auth.test did not identify the workspace for member authorization");
     }
+    await this.#socket.start();
     this.#logger.info("Slack bot connected through Socket Mode", {
       botUserId: auth.user_id,
       team: auth.team ?? "unknown",
       authorization: this.#allowAllWorkspaceMembers ? "workspace-members" : "allowlist",
     });
-    await this.#socket.start();
   }
 
   public isAuthorized(principal: ProviderReference): boolean | Promise<boolean> {
@@ -250,9 +231,10 @@ export class SlackChannel implements MessagingChannel {
       userName: inbound.sender.displayName,
       conversation: inbound.address.key,
       ...(command === undefined ? {} : { command: command.name }),
-      text: truncateForLog(inbound.text, 1_000),
+      chars: inbound.text.length,
+      attachments: inbound.attachments.length,
     });
-    if (command !== undefined && adminCommands.has(command.name) && !this.isAdmin(userId)) {
+    if (command !== undefined && instanceAdminCommands.has(command.name) && !this.isAdmin(userId)) {
       await inbound.responder.sendText(
         "This command changes Wirebot for everyone using it and is limited to its admins.",
       );
@@ -283,6 +265,12 @@ export class SlackChannel implements MessagingChannel {
     try {
       const response = await this.#web.users.info({ user: userId });
       allowed = isWorkspaceMember(response.user, botTeamId);
+      const profile = response.user?.profile;
+      const name = firstNonEmpty(profile?.display_name, profile?.real_name, response.user?.name);
+      if (name !== undefined) {
+        if (this.#displayNames.size >= displayNameCacheLimit) this.#displayNames.clear();
+        this.#displayNames.set(userId, name);
+      }
     } catch (error) {
       // Fail closed: an unknown user (e.g. a Slack Connect outsider the bot
       // token cannot see) is not a workspace member.
@@ -306,11 +294,22 @@ export class SlackChannel implements MessagingChannel {
     await this.#socket.disconnect().catch((error: unknown) => {
       this.#logger.debug("Slack socket disconnect failed", { error: errorMessage(error) });
     });
-    for (const choice of this.#pendingChoices.values()) {
+    const pendingChoices = [...this.#pendingChoices.values()];
+    this.#pendingChoices.clear();
+    for (const choice of pendingChoices) {
       clearTimeout(choice.timer);
       choice.result.resolve("decline");
     }
-    this.#pendingChoices.clear();
+    await Promise.allSettled(
+      pendingChoices.map(async (choice) => {
+        await this.#api.updateMessage({
+          channel: choice.channel,
+          ts: choice.messageTs,
+          text: `${choice.baseText}\n\n→ Request cancelled`,
+          blocks: [],
+        });
+      }),
+    );
   }
 
   public async publish(
@@ -399,7 +398,12 @@ export class SlackChannel implements MessagingChannel {
       caption.length > 0
         ? caption
         : attachments.map((attachment) => `[Attached: ${attachment.description}]`).join("\n");
-    if (text.length === 0) return;
+    if (text.length === 0) {
+      if (normalized.files.length > 0) {
+        await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+      }
+      return;
+    }
     const threadKey = `${event.channel}:${route.conversationSuffix}`;
     const threadWasEngaged = this.#engagedThreads.has(threadKey);
     if (event.channel_type !== "im") {
@@ -448,16 +452,19 @@ export class SlackChannel implements MessagingChannel {
       text: contextualText,
       attachments,
       responder,
+      ...(normalized.files.length === 0
+        ? {}
+        : {
+            dispose: async (): Promise<void> => {
+              await rm(directory, { recursive: true, force: true });
+            },
+          }),
     };
     try {
       await this.dispatch(inbound, event.channel, sender);
     } catch (error) {
       this.#logger.error("Slack message handler failed", error, { messageTs: inbound.id });
       await responder.sendText(`Bridge error: ${errorMessage(error)}`).catch(() => undefined);
-    } finally {
-      if (normalized.files.length > 0) {
-        await rm(directory, { recursive: true, force: true }).catch(() => undefined);
-      }
     }
   }
 
@@ -726,8 +733,10 @@ export class SlackChannel implements MessagingChannel {
     userId,
     prompt,
     options,
+    signal,
   ): Promise<string> => {
-    if (options.length === 0) return "decline";
+    const isAborted = (): boolean => signal?.aborted === true;
+    if (options.length === 0 || isAborted()) return "decline";
     const token = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
     const baseText = choicePromptText(prompt, options);
     const blocks: readonly SlackBlock[] = [
@@ -751,8 +760,18 @@ export class SlackChannel implements MessagingChannel {
     const result = deferred<string>();
     const timer = setTimeout(
       () => {
+        const pending = this.#pendingChoices.get(token);
+        if (pending === undefined) return;
         this.#pendingChoices.delete(token);
-        result.resolve("decline");
+        pending.result.resolve("decline");
+        void this.#api
+          .updateMessage({
+            channel: pending.channel,
+            ts: pending.messageTs,
+            text: `${pending.baseText}\n\n→ Request expired`,
+            blocks: [],
+          })
+          .catch(() => undefined);
       },
       5 * 60 * 1_000,
     );
@@ -766,7 +785,28 @@ export class SlackChannel implements MessagingChannel {
       messageTs,
       baseText,
     });
-    return await result.promise;
+    const onAbort = (): void => {
+      const pending = this.#pendingChoices.get(token);
+      if (pending === undefined) return;
+      clearTimeout(pending.timer);
+      this.#pendingChoices.delete(token);
+      pending.result.resolve("decline");
+      void this.#api
+        .updateMessage({
+          channel: pending.channel,
+          ts: pending.messageTs,
+          text: `${pending.baseText}\n\n→ Request cancelled`,
+          blocks: [],
+        })
+        .catch(() => undefined);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (isAborted()) onAbort();
+    try {
+      return await result.promise;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+    }
   };
 
   private async displayName(userId: string): Promise<string> {
@@ -857,8 +897,20 @@ function webMessagingApi(web: WebClient): SlackMessagingApi {
       });
     },
     async fetchThreadReplies(channel, threadTs, limit) {
-      const result = await web.conversations.replies({ channel, ts: threadTs, limit });
-      return (result.messages ?? []) as unknown as readonly SlackThreadMessage[];
+      const messages: SlackThreadMessage[] = [];
+      let cursor: string | undefined;
+      do {
+        const result = await web.conversations.replies({
+          channel,
+          ts: threadTs,
+          limit: 200,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        messages.push(...((result.messages ?? []) as unknown as readonly SlackThreadMessage[]));
+        const next = result.response_metadata?.next_cursor?.trim();
+        cursor = next === undefined || next.length === 0 ? undefined : next;
+      } while (cursor !== undefined);
+      return messages.slice(-limit);
     },
   };
 }

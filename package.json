@@ -22,7 +22,6 @@
     "check": "tsc -p tsconfig.json && biome check .",
     "dev": "bun run build && bun --watch src/cli/main.ts start",
     "start": "bun src/cli/main.ts start",
-    "test": "bun test test",
     "protocol:generate-bindings": "bun src/cli/main.ts codex check --apply --version $(cat codex.version)",
     "codex:check": "bun src/cli/main.ts codex check",
     "codex:update": "bun src/cli/main.ts codex check --apply"

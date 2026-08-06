@@ -1,11 +1,10 @@
 import type { ProgressSnapshot } from "../core/channel.js";
+import { compactTruncate, truncate } from "../shared/text.js";
 
 export function formatThinkingBlock(progress: ProgressSnapshot, limit = 800): string {
   const text =
     progress.plan.length > 1 ? formatPlanProgress(progress) : formatActionProgress(progress);
-  if (text.length <= limit) return text;
-  if (limit <= 1) return "…".slice(0, limit);
-  return `${text.slice(0, limit - 1).trimEnd()}…`;
+  return truncate(text, limit);
 }
 
 function formatActionProgress(progress: ProgressSnapshot): string {
@@ -18,9 +17,9 @@ function formatActionProgress(progress: ProgressSnapshot): string {
     ...visibleActions.map((action) => action.label),
   ];
   return [
-    `▌ ${truncateLine(heading, 180)}`,
+    `▌ ${compactTruncate(heading, 180)}`,
     ...rows.map(
-      (row, index) => `${index === rows.length - 1 ? "└" : "├"} ${truncateLine(row, 180)}`,
+      (row, index) => `${index === rows.length - 1 ? "└" : "├"} ${compactTruncate(row, 180)}`,
     ),
   ].join("\n");
 }
@@ -37,10 +36,10 @@ function formatPlanProgress(progress: ProgressSnapshot): string {
     const isCurrent = index === activeIndex;
     if (isCurrent && lines.length > 0) lines.push("");
     const marker = step.status === "completed" ? "✓" : isCurrent ? "→" : "○";
-    const suffix = isCurrent && context.length > 0 ? ` (${truncateLine(context, 140)})` : "";
-    lines.push(`${marker} ${truncateLine(step.step, 180)}${suffix}`);
+    const suffix = isCurrent && context.length > 0 ? ` (${compactTruncate(context, 140)})` : "";
+    lines.push(`${marker} ${compactTruncate(step.step, 180)}${suffix}`);
     if (isCurrent && reasoningMessage !== undefined && reasoningMessage !== context) {
-      lines.push(truncateLine(reasoningMessage, 240));
+      lines.push(compactTruncate(reasoningMessage, 240));
     }
     if (isCurrent && index < progress.plan.length - 1) lines.push("");
   });
@@ -50,11 +49,6 @@ function formatPlanProgress(progress: ProgressSnapshot): string {
 
 function firstLine(text: string | undefined): string {
   return text?.trim().split("\n", 1)[0]?.trim() ?? "";
-}
-
-function truncateLine(text: string, limit: number): string {
-  const compact = text.replaceAll(/\s+/g, " ").trim();
-  return compact.length <= limit ? compact : `${compact.slice(0, limit - 1).trimEnd()}…`;
 }
 
 export function splitMessageText(text: string, limit: number): readonly string[] {

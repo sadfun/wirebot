@@ -223,7 +223,6 @@ Development commands:
 
 ```sh
 bun run check      # typecheck + biome
-bun run test       # connector unit tests
 bun run compile    # single-file executable in dist/wirebot
 docker build .     # the release image
 ```
@@ -231,8 +230,6 @@ docker build .     # the release image
 Source runs keep Codex's `workspace-write` sandbox default and store state under `./.wirebot`. They download the pinned Codex CLI on first start; cloudflared and curl-impersonate are invoked from PATH, where the container image bakes the pinned builds. Without cloudflared (or `PUBLIC_URL`) the quick tunnel is skipped, and without curl-impersonate voice messages are forwarded to Codex untranscribed. The compiled executable embeds the app version, the Codex pin, and bytecode with maximum optimizations; Mini App assets and the pinned toolchains are baked into the image alongside it.
 
 The handwritten application is strict TypeScript. Messaging transports depend only on `src/core/channel.ts`; Telegram and Slack implement the same contract.
-
-The Slack connector has focused unit coverage for routing, formatting, authorization, configuration, and delivery. Broader tests are being rebuilt as end-to-end runs that exercise the actual container image.
 
 ### Codex protocol updates
 

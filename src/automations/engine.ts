@@ -322,9 +322,29 @@ export class ScheduledRunsEngine {
     conversation: ProviderReference,
   ): Promise<ApplicationContext | undefined> {
     if (replyTo === undefined) return undefined;
-    const notification = this.#store.findNotificationByPublishedMessage(replyTo);
+    let notification = this.#store.findNotificationByPublishedMessage(replyTo);
+    let automation =
+      notification === undefined ? undefined : this.#store.getAutomation(notification.automationId);
+    // Slack threads are flat: after a restart the connector only has the
+    // thread-root reference, not the notification reply timestamp cached in
+    // memory. Recover the latest delivered result for this exact owner and
+    // conversation from persisted automation state.
+    if (notification === undefined && replyTo.provider === "slack") {
+      for (const candidate of this.#store.listNotifications()) {
+        if (candidate.status !== "delivered") continue;
+        const candidateAutomation = this.#store.getAutomation(candidate.automationId);
+        if (
+          candidateAutomation !== undefined &&
+          sameReference(candidateAutomation.owner, owner) &&
+          sameReference(candidateAutomation.conversation, conversation)
+        ) {
+          notification = candidate;
+          automation = candidateAutomation;
+          break;
+        }
+      }
+    }
     if (notification === undefined) return undefined;
-    const automation = this.#store.getAutomation(notification.automationId);
     if (
       automation === undefined ||
       !sameReference(automation.owner, owner) ||
