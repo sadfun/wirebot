@@ -10,6 +10,7 @@ import {
   type Message,
   MessageFlags,
   Partials,
+  PermissionFlagsBits,
   SlashCommandBuilder,
   type StringSelectMenuInteraction,
 } from "discord.js";
@@ -304,6 +305,19 @@ export class DiscordChannel implements MessagingChannel {
     }
     try {
       const existing = message.thread;
+      if (existing === null) {
+        const clientUser = this.#client.user;
+        const permissions = clientUser === null ? null : message.channel.permissionsFor(clientUser);
+        if (
+          permissions?.has([
+            PermissionFlagsBits.CreatePublicThreads,
+            PermissionFlagsBits.SendMessagesInThreads,
+          ]) !== true
+        ) {
+          await this.notifyThreadRequired(message);
+          return undefined;
+        }
+      }
       const thread =
         existing ??
         (await message.startThread({
@@ -333,9 +347,17 @@ export class DiscordChannel implements MessagingChannel {
   private async notifyThreadRequired(message: Message): Promise<void> {
     const content =
       "I need a usable Discord thread to keep Codex tasks isolated. Grant Create Public Threads and Send Messages in Threads, or mention me inside an unlocked thread where I can reply.";
-    const target = message.channel.isThread() ? message.channel.parent : undefined;
-    const send =
-      target?.isTextBased() === true && !target.isVoiceBased() && target.isSendable()
+    const privateThread =
+      message.channel.isThread() && message.channel.type === ChannelType.PrivateThread;
+    const target =
+      message.channel.isThread() && !privateThread ? message.channel.parent : undefined;
+    const send = privateThread
+      ? message.author.send({
+          content: `I can't answer in that private thread. ${content}`,
+          allowedMentions: { parse: [], repliedUser: false },
+          flags: MessageFlags.SuppressEmbeds,
+        })
+      : target?.isTextBased() === true && !target.isVoiceBased() && target.isSendable()
         ? target.send({
             content: `I can't answer in <#${message.channelId}>. ${content}`,
             allowedMentions: { parse: [], repliedUser: false },
@@ -370,9 +392,9 @@ export class DiscordChannel implements MessagingChannel {
     ) {
       return text;
     }
-    this.rememberEngagedThread(message.channelId);
     try {
       const history = await message.channel.messages.fetch({ before: message.id, limit: 100 });
+      this.rememberEngagedThread(message.channelId);
       const context = formatDiscordThreadContext(
         [...history.values()].sort((left, right) => left.createdTimestamp - right.createdTimestamp),
         message.id,

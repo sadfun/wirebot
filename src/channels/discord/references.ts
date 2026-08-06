@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ProviderReference } from "../../core/channel.js";
 import { decodeBase64UrlJson } from "../../shared/text.js";
 
-const snowflake = z.string().regex(/^\d{15,22}$/u);
+const snowflake = z.string().regex(/^\d{15,20}$/u);
 
 const destinationSchema = z.object({
   version: z.literal(1),

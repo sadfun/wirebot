@@ -266,7 +266,7 @@ function parseDiscordUserIds(raw: string): ReadonlySet<string> {
       z
         .string()
         .regex(
-          /^\d{15,22}$/u,
+          /^\d{15,20}$/u,
           "Discord user IDs are numeric snowflakes, such as 123456789012345678",
         )
         .parse(part.trim()),
