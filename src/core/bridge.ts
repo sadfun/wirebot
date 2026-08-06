@@ -82,14 +82,17 @@ export const instanceAdminCommands: ReadonlySet<string> = new Set([
   "restart",
 ]);
 
-const helpText = [
-  "Send me a message to work with Codex in this conversation.",
-  "",
-  ...botCommands.map((entry) => `/${entry.command} — ${entry.help}`),
-].join("\n");
+function helpText(channel: string): string {
+  return [
+    "Send me a message to work with Codex in this conversation.",
+    "",
+    ...botCommands.map((entry) => `${commandText(channel, entry.command)} — ${entry.help}`),
+  ].join("\n");
+}
 
-const readyText =
-  'Try something like "explain what this project does", or send /help for all commands.';
+function readyText(channel: string): string {
+  return `Try something like "explain what this project does", or send ${commandText(channel, "help")} for all commands.`;
+}
 
 const loginCodeTtl = 15 * 60 * 1_000;
 
@@ -104,6 +107,7 @@ export interface CodexRuntimeCommand {
 interface PendingLogin {
   readonly responder: MessageResponder;
   readonly timer: NodeJS.Timeout;
+  readonly channel: string;
   /** Message that arrived before sign-in; replayed once login completes. */
   readonly resume?: InboundMessage;
 }
@@ -204,7 +208,7 @@ export class CodexBridge {
         await this.handleStart(message);
         return;
       case "help":
-        await message.responder.sendText(helpText);
+        await message.responder.sendText(helpText(message.address.channel));
         return;
       case "new":
         await this.#codex.resetConversation(message.address.key);
@@ -247,7 +251,7 @@ export class CodexBridge {
         return;
       }
       case "status":
-        await message.responder.sendText(await this.statusText());
+        await message.responder.sendText(await this.statusText(message.address.channel));
         return;
       case "schedules":
         await this.handleSchedules(message);
@@ -260,11 +264,15 @@ export class CodexBridge {
         const account = (await this.#codex.account().catch(() => undefined))?.account;
         if (account !== undefined && account !== null) {
           await message.responder.sendText(
-            `You're already ${accountSummary(account)}. Send /logout first if you want to switch accounts.`,
+            `You're already ${accountSummary(account)}. Send ${commandText(message.address.channel, "logout")} first if you want to switch accounts.`,
           );
           return;
         }
-        await this.sendLogin(message.responder, await this.#codex.startDeviceLogin());
+        await this.sendLogin(
+          message.responder,
+          await this.#codex.startDeviceLogin(),
+          message.address.channel,
+        );
         return;
       }
       case "logout":
@@ -272,7 +280,7 @@ export class CodexBridge {
         await this.#codex.logout();
         this.#signedInConfirmed = false;
         await message.responder.sendText(
-          "Signed out of Codex. Send /login whenever you want back in.",
+          `Signed out of Codex. Send ${commandText(message.address.channel, "login")} whenever you want back in.`,
         );
         return;
       case "config":
@@ -300,7 +308,9 @@ export class CodexBridge {
         await this.handleRuntimeCommand(message, "restart");
         return;
       default:
-        await message.responder.sendText(`Unknown command /${command.name}.\n\n${helpText}`);
+        await message.responder.sendText(
+          `Unknown command ${commandText(message.address.channel, command.name)}.\n\n${helpText(message.address.channel)}`,
+        );
     }
   }
 
@@ -337,7 +347,7 @@ export class CodexBridge {
     );
     await message.responder.sendText(
       result.changed
-        ? `Continuing “${result.automationName}”. Subsequent messages will use that Codex thread. Send /back to return.`
+        ? `Continuing “${result.automationName}”. Subsequent messages will use that Codex thread. Send ${commandText(message.address.channel, "back")} to return.`
         : `“${result.automationName}” is already the active Codex thread.`,
     );
   }
@@ -369,7 +379,7 @@ export class CodexBridge {
   private async handleStart(message: InboundMessage): Promise<void> {
     const status = await this.#codex.account().catch(() => undefined);
     if (status === undefined) {
-      await message.responder.sendText(`${introText}\n\n${helpText}`);
+      await message.responder.sendText(`${introText}\n\n${helpText(message.address.channel)}`);
       return;
     }
     if (!needsLogin(status)) {
@@ -378,18 +388,21 @@ export class CodexBridge {
         account === null
           ? "✅ No sign-in needed with this configuration — you're ready to go."
           : `✅ You're ${accountSummary(account)} — ready to go.`;
-      await message.responder.sendText(`${introText}\n\n${readyLine}\n\n${readyText}`);
+      await message.responder.sendText(
+        `${introText}\n\n${readyLine}\n\n${readyText(message.address.channel)}`,
+      );
       return;
     }
     if (!isPrivate(message)) {
       await message.responder.sendText(
-        `${introText}\n\nTo get set up, open a private chat with me and send /start — I'll walk you through signing in to ChatGPT.`,
+        `${introText}\n\nTo get set up, open a private chat with me and send ${commandText(message.address.channel, "start")} — I'll walk you through signing in to ChatGPT.`,
       );
       return;
     }
     await this.sendLogin(
       message.responder,
       await this.#codex.startDeviceLogin(),
+      message.address.channel,
       `${introText}\n\nOne thing first: let's connect your ChatGPT account.`,
     );
   }
@@ -407,13 +420,14 @@ export class CodexBridge {
       await this.sendLogin(
         message.responder,
         await this.#codex.startDeviceLogin(),
+        message.address.channel,
         "Almost there — I need you to sign in to ChatGPT before I can work on that. I'll start on your message as soon as you're in.",
         message,
       );
       return "deferred";
     } else {
       await message.responder.sendText(
-        "Codex isn't signed in yet. Open a private chat with me and send /start to set it up.",
+        `Codex isn't signed in yet. Open a private chat with me and send ${commandText(message.address.channel, "start")} to set it up.`,
       );
       return "rejected";
     }
@@ -442,7 +456,7 @@ export class CodexBridge {
           await pending.responder.sendText(
             `Sign-in didn't go through${
               notification.error === null ? "" : `: ${notification.error}`
-            }. Send /login to try again with a fresh code.`,
+            }. Send ${commandText(pending.channel, "login")} to try again with a fresh code.`,
           );
         }
       } catch (error) {
@@ -456,6 +470,7 @@ export class CodexBridge {
   private async sendLogin(
     responder: MessageResponder,
     login: LoginAccountResponse,
+    channel: string,
     intro?: string,
     resume?: InboundMessage,
   ): Promise<void> {
@@ -468,7 +483,7 @@ export class CodexBridge {
             button: { label: "Open sign-in", kind: "url", url: login.verificationUrl },
           },
         );
-        this.registerPendingLogin(login.loginId, responder, resume);
+        this.registerPendingLogin(login.loginId, responder, channel, resume);
         return;
       case "chatgpt":
         await responder.sendText(
@@ -477,7 +492,7 @@ export class CodexBridge {
             button: { label: "Open sign-in", kind: "url", url: login.authUrl },
           },
         );
-        this.registerPendingLogin(login.loginId, responder, resume);
+        this.registerPendingLogin(login.loginId, responder, channel, resume);
         return;
       case "apiKey":
         await responder.sendText("Codex is configured to use an API key.");
@@ -490,6 +505,7 @@ export class CodexBridge {
   private registerPendingLogin(
     loginId: string,
     responder: MessageResponder,
+    channel: string,
     resume?: InboundMessage,
   ): void {
     const existing = this.#pendingLogins.get(loginId);
@@ -507,6 +523,7 @@ export class CodexBridge {
     this.#pendingLogins.set(loginId, {
       responder,
       timer,
+      channel,
       ...(resume === undefined ? {} : { resume }),
     });
   }
@@ -538,11 +555,11 @@ export class CodexBridge {
     return false;
   }
 
-  private async statusText(): Promise<string> {
+  private async statusText(channel: string): Promise<string> {
     const runtime = runtimeStatusSummary(this.#runtimeCommand.status());
     const response = await this.#codex.account().catch((error: unknown) => {
       throw new BridgeError(
-        `Codex app-server is unavailable: ${errorMessage(error)}. Runtime status: ${runtime.detail}. Send /restart to recover it.`,
+        `Codex app-server is unavailable: ${errorMessage(error)}. Runtime status: ${runtime.detail}. Send ${commandText(channel, "restart")} to recover it.`,
         "CODEX_STATUS_UNAVAILABLE",
       );
     });
@@ -550,7 +567,7 @@ export class CodexBridge {
     const accountStatus =
       account === null
         ? response.requiresOpenaiAuth
-          ? "Codex app-server is connected. Not signed in — send /login to connect ChatGPT."
+          ? `Codex app-server is connected. Not signed in — send ${commandText(channel, "login")} to connect ChatGPT.`
           : "Codex app-server is connected. This configuration does not require OpenAI sign-in."
         : `Codex app-server is connected. You're ${accountSummary(account)}.`;
     return runtime.degraded
@@ -605,4 +622,8 @@ function messageConversation(message: InboundMessage): ProviderReference {
     resource: "conversation",
     id: message.address.key,
   };
+}
+
+function commandText(channel: string, command: string): string {
+  return channel === "slack" || channel === "discord" ? `/wirebot ${command}` : `/${command}`;
 }

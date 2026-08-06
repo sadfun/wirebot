@@ -6,6 +6,9 @@ All notable changes to Wirebot are documented in this file.
 
 ### Added
 
+- A text-only Discord connector built on discord.js, with direct messages, isolated server
+  threads, streamed progress, native `/wirebot` commands, approvals, interactive Codex settings,
+  scheduled notifications, strict user/admin allowlists, and safe mention suppression.
 - A Slack connector over Socket Mode, including direct messages, mention-gated channel threads,
   approvals, file transfer, voice transcription, scheduled notifications, `/wirebot` commands,
   and an interactive Codex settings UI. Slack can run alongside Telegram or as the only connector.
