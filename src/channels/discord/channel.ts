@@ -29,10 +29,10 @@ import {
   type ProviderReference,
   registerChannelTraits,
 } from "../../core/channel.js";
-import { type Deferred, deferred } from "../../shared/async.js";
 import { trimInsertionOrdered } from "../../shared/collections.js";
 import { errorMessage } from "../../shared/errors.js";
 import type { Logger } from "../../shared/logger.js";
+import { PendingChoices } from "../choices.js";
 import { type CodexConfigAccess, DiscordConfigUi, discordConfigActionPrefix } from "./config-ui.js";
 import {
   discordDisplayName,
@@ -59,15 +59,10 @@ import {
   publishDiscordMessage,
 } from "./reply.js";
 
-interface PendingChoice {
-  readonly userId: string;
-  readonly options: readonly ChoiceOption[];
-  readonly result: Deferred<string>;
-  readonly timer: NodeJS.Timeout;
+interface DiscordChoiceContext {
   readonly channelId: string;
   readonly messageId: string;
   readonly baseText: string;
-  readonly token: string;
 }
 
 interface DiscordReplyRoute {
@@ -77,7 +72,6 @@ interface DiscordReplyRoute {
 
 const recentEventLimit = 1_000;
 const engagedThreadLimit = 500;
-const choiceTimeoutMs = 5 * 60 * 1_000;
 const adminOnlyText =
   "This command changes Wirebot for everyone using it and is limited to its admins.";
 
@@ -90,7 +84,14 @@ export class DiscordChannel implements MessagingChannel {
   readonly #adminUserIds: ReadonlySet<string> | undefined;
   readonly #logger: Logger;
   readonly #configUi: DiscordConfigUi | undefined;
-  readonly #pendingChoices = new Map<string, PendingChoice>();
+  readonly #pendingChoices = new PendingChoices<DiscordChoiceContext>(async (entry, status) => {
+    await this.#api.updateMessage({
+      channelId: entry.context.channelId,
+      messageId: entry.context.messageId,
+      content: `${entry.context.baseText}\n\n→ ${status}`.slice(0, 2_000),
+      components: choiceRows(entry.token, entry.options, true),
+    });
+  });
   readonly #recentEvents = new Set<string>();
   readonly #engagedThreads = new Set<string>();
   #handler: MessageHandler | undefined;
@@ -193,11 +194,7 @@ export class DiscordChannel implements MessagingChannel {
 
   public async stop(): Promise<void> {
     this.#handler = undefined;
-    await Promise.allSettled(
-      [...this.#pendingChoices.keys()].map(async (token) => {
-        await this.declineChoice(token, "Request cancelled");
-      }),
-    );
+    await this.#pendingChoices.declineAll("Request cancelled");
     await this.#client.destroy();
   }
 
@@ -596,13 +593,12 @@ export class DiscordChannel implements MessagingChannel {
     }
     const selected = pending.options[index];
     if (selected === undefined) return;
-    this.takeChoice(pending.token);
-    pending.result.resolve(selected.id);
+    this.#pendingChoices.select(pending.token, selected.id);
     await this.#api
       .updateMessage({
-        channelId: pending.channelId,
-        messageId: pending.messageId,
-        content: `${pending.baseText}\n\n→ ${selected.label}`.slice(0, 2_000),
+        channelId: pending.context.channelId,
+        messageId: pending.context.messageId,
+        content: `${pending.context.baseText}\n\n→ ${selected.label}`.slice(0, 2_000),
         components: [],
       })
       .catch(() => undefined);
@@ -686,66 +682,18 @@ export class DiscordChannel implements MessagingChannel {
     options: readonly ChoiceOption[],
     signal?: AbortSignal,
   ): Promise<string> => {
-    const isAborted = (): boolean => signal?.aborted === true;
-    if (options.length === 0 || isAborted()) return "decline";
+    // Discord caps a message at 5 button rows of 5.
     const visibleOptions = options.slice(0, 25);
-    const token = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
-    const baseText = choicePromptText(prompt, visibleOptions);
-    const messageId = await this.#api.postMessage({
-      channelId,
-      content: baseText,
-      components: choiceRows(token, visibleOptions),
+    return await this.#pendingChoices.request(userId, visibleOptions, signal, async (token) => {
+      const baseText = choicePromptText(prompt, visibleOptions);
+      const messageId = await this.#api.postMessage({
+        channelId,
+        content: baseText,
+        components: choiceRows(token, visibleOptions),
+      });
+      return { channelId, messageId, baseText };
     });
-    const result = deferred<string>();
-    const timer = setTimeout(() => {
-      void this.declineChoice(token, "Request expired");
-    }, choiceTimeoutMs);
-    timer.unref();
-    const pending: PendingChoice = {
-      userId,
-      options: visibleOptions,
-      result,
-      timer,
-      channelId,
-      messageId,
-      baseText,
-      token,
-    };
-    this.#pendingChoices.set(token, pending);
-    const onAbort = (): void => {
-      void this.declineChoice(token, "Request cancelled");
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    if (isAborted()) onAbort();
-    try {
-      return await result.promise;
-    } finally {
-      signal?.removeEventListener("abort", onAbort);
-    }
   };
-
-  /** Remove a pending choice from the map and cancel its expiry timer. */
-  private takeChoice(token: string): PendingChoice | undefined {
-    const pending = this.#pendingChoices.get(token);
-    if (pending === undefined) return undefined;
-    this.#pendingChoices.delete(token);
-    clearTimeout(pending.timer);
-    return pending;
-  }
-
-  private async declineChoice(token: string, status: string): Promise<void> {
-    const pending = this.takeChoice(token);
-    if (pending === undefined) return;
-    pending.result.resolve("decline");
-    await this.#api
-      .updateMessage({
-        channelId: pending.channelId,
-        messageId: pending.messageId,
-        content: `${pending.baseText}\n\n→ ${status}`.slice(0, 2_000),
-        components: choiceRows(pending.token, pending.options, true),
-      })
-      .catch(() => undefined);
-  }
 
   private responder(
     channelId: string,

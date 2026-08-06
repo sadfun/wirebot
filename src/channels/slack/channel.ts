@@ -9,7 +9,6 @@ import {
   instanceAdminCommands,
 } from "../../core/bridge.js";
 import {
-  type ChoiceOption,
   type DeliveryReceipt,
   type InboundAttachment,
   type InboundMessage,
@@ -19,10 +18,10 @@ import {
   type ProviderReference,
   registerChannelTraits,
 } from "../../core/channel.js";
-import { type Deferred, deferred } from "../../shared/async.js";
 import { trimInsertionOrdered, trimInsertionOrderedMap } from "../../shared/collections.js";
 import { errorMessage } from "../../shared/errors.js";
 import type { Logger } from "../../shared/logger.js";
+import { PendingChoices } from "../choices.js";
 import { isWorkspaceMember } from "./authorization.js";
 import { type CodexConfigAccess, SlackConfigUi, slackConfigActionPrefix } from "./config-ui.js";
 import { downloadSlackFile, SlackFileDownloadError } from "./file.js";
@@ -89,11 +88,7 @@ interface SlackInteractivePayload {
   readonly actions?: readonly SlackBlockAction[];
 }
 
-interface PendingChoice {
-  readonly userId: string;
-  readonly options: readonly ChoiceOption[];
-  readonly result: Deferred<string>;
-  readonly timer: NodeJS.Timeout;
+interface SlackChoiceContext {
   readonly channel: string;
   readonly messageTs: string;
   readonly baseText: string;
@@ -129,7 +124,14 @@ export class SlackChannel implements MessagingChannel {
   readonly #botToken: string;
   readonly #attachmentDirectory: string;
   readonly #logger: Logger;
-  readonly #pendingChoices = new Map<string, PendingChoice>();
+  readonly #pendingChoices = new PendingChoices<SlackChoiceContext>(async (entry, status) => {
+    await this.#api.updateMessage({
+      channel: entry.context.channel,
+      ts: entry.context.messageTs,
+      text: `${entry.context.baseText}\n\n→ ${status}`,
+      blocks: [],
+    });
+  });
   /** Threads the bot already answered in — first mentions there skip the history fetch. */
   readonly #engagedThreads = new Set<string>();
   readonly #recentEvents = new Set<string>();
@@ -300,22 +302,7 @@ export class SlackChannel implements MessagingChannel {
     await this.#socket.disconnect().catch((error: unknown) => {
       this.#logger.debug("Slack socket disconnect failed", { error: errorMessage(error) });
     });
-    const pendingChoices = [...this.#pendingChoices.values()];
-    this.#pendingChoices.clear();
-    for (const choice of pendingChoices) {
-      clearTimeout(choice.timer);
-      choice.result.resolve("decline");
-    }
-    await Promise.allSettled(
-      pendingChoices.map(async (choice) => {
-        await this.#api.updateMessage({
-          channel: choice.channel,
-          ts: choice.messageTs,
-          text: `${choice.baseText}\n\n→ Request cancelled`,
-          blocks: [],
-        });
-      }),
-    );
+    await this.#pendingChoices.declineAll("Request cancelled");
   }
 
   public async publish(
@@ -663,14 +650,12 @@ export class SlackChannel implements MessagingChannel {
     }
     const selected = pending.options[index];
     if (selected === undefined) return;
-    clearTimeout(pending.timer);
-    this.#pendingChoices.delete(token);
-    pending.result.resolve(selected.id);
+    this.#pendingChoices.select(token, selected.id);
     await this.#api
       .updateMessage({
-        channel: pending.channel,
-        ts: pending.messageTs,
-        text: `${pending.baseText}\n\n→ ${escapeSlackEntities(selected.label)}`,
+        channel: pending.context.channel,
+        ts: pending.context.messageTs,
+        text: `${pending.context.baseText}\n\n→ ${escapeSlackEntities(selected.label)}`,
         blocks: [],
       })
       .catch(() => undefined);
@@ -741,78 +726,28 @@ export class SlackChannel implements MessagingChannel {
     options,
     signal,
   ): Promise<string> => {
-    const isAborted = (): boolean => signal?.aborted === true;
-    if (options.length === 0 || isAborted()) return "decline";
-    const token = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
-    const baseText = choicePromptText(prompt, options);
-    const blocks: readonly SlackBlock[] = [
-      { type: "section", text: { type: "mrkdwn", text: baseText } },
-      {
-        type: "actions",
-        elements: options.map((option, index) => ({
-          type: "button" as const,
-          text: { type: "plain_text" as const, text: option.label.slice(0, 75) },
-          action_id: `wirebot_choice_${index}`,
-          value: `${token}:${index}`,
-        })),
-      },
-    ];
-    const messageTs = await this.#api.postMessage({
-      channel,
-      text: baseText,
-      blocks,
-      ...(threadTs === undefined ? {} : { threadTs }),
+    return await this.#pendingChoices.request(userId, options, signal, async (token) => {
+      const baseText = choicePromptText(prompt, options);
+      const blocks: readonly SlackBlock[] = [
+        { type: "section", text: { type: "mrkdwn", text: baseText } },
+        {
+          type: "actions",
+          elements: options.map((option, index) => ({
+            type: "button" as const,
+            text: { type: "plain_text" as const, text: option.label.slice(0, 75) },
+            action_id: `wirebot_choice_${index}`,
+            value: `${token}:${index}`,
+          })),
+        },
+      ];
+      const messageTs = await this.#api.postMessage({
+        channel,
+        text: baseText,
+        blocks,
+        ...(threadTs === undefined ? {} : { threadTs }),
+      });
+      return { channel, messageTs, baseText };
     });
-    const result = deferred<string>();
-    const timer = setTimeout(
-      () => {
-        const pending = this.#pendingChoices.get(token);
-        if (pending === undefined) return;
-        this.#pendingChoices.delete(token);
-        pending.result.resolve("decline");
-        void this.#api
-          .updateMessage({
-            channel: pending.channel,
-            ts: pending.messageTs,
-            text: `${pending.baseText}\n\n→ Request expired`,
-            blocks: [],
-          })
-          .catch(() => undefined);
-      },
-      5 * 60 * 1_000,
-    );
-    timer.unref();
-    this.#pendingChoices.set(token, {
-      userId,
-      options,
-      result,
-      timer,
-      channel,
-      messageTs,
-      baseText,
-    });
-    const onAbort = (): void => {
-      const pending = this.#pendingChoices.get(token);
-      if (pending === undefined) return;
-      clearTimeout(pending.timer);
-      this.#pendingChoices.delete(token);
-      pending.result.resolve("decline");
-      void this.#api
-        .updateMessage({
-          channel: pending.channel,
-          ts: pending.messageTs,
-          text: `${pending.baseText}\n\n→ Request cancelled`,
-          blocks: [],
-        })
-        .catch(() => undefined);
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    if (isAborted()) onAbort();
-    try {
-      return await result.promise;
-    } finally {
-      signal?.removeEventListener("abort", onAbort);
-    }
   };
 
   private async displayName(userId: string): Promise<string> {
