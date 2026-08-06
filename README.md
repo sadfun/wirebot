@@ -1,6 +1,6 @@
 # 🤖 Wirebot
 
-Wirebot brings Codex to your messenger: a full Codex agent you talk to from Telegram, built on a transport layer designed so Slack, Discord, and others can follow.
+Wirebot brings Codex to your messenger: a full Codex agent you talk to from Telegram or Slack, built on a transport layer designed so more messengers can follow.
 
 Think of it as OpenClaw or Hermes Agent with a different philosophy:
 
@@ -11,6 +11,7 @@ Think of it as OpenClaw or Hermes Agent with a different philosophy:
 Out of the box:
 
 * **Rich Telegram I/O** — photos and files in both directions, voice messages with automatic transcription, forwarded and replied-to context, polls and other structured messages.
+* **Slack over Socket Mode** — direct messages, channel threads, approvals, files, commands, and scheduled notifications without a public webhook.
 * **A real agent experience** — streamed replies and thinking, interactive approvals, persistent Codex threads, private conversations, and guest mentions.
 * **Scheduled runs** — describe an automation in plain language and Wirebot keeps it running, following Codex Desktop's scheduled-task model.
 * **Settings Mini App** — an authenticated in-Telegram UI for Codex configuration, skills, and schedules.
@@ -22,7 +23,7 @@ Out of the box:
 
 ### Run with Docker
 
-Requirements: Docker (or any OCI runtime), a bot token from [@BotFather](https://t.me/BotFather), and the numeric Telegram user IDs allowed to use the bot.
+Requirements: Docker (or any OCI runtime) and at least one configured connector: Telegram credentials, Slack credentials, or both.
 
 Create a directory with a `docker-compose.yml`:
 
@@ -47,6 +48,8 @@ TELEGRAM_ALLOWED_USER_IDS=123456789
 ```
 
 `TELEGRAM_ALLOWED_USER_IDS` is a comma-separated list. Messages from other accounts are ignored, including guest-mode mentions. Then:
+
+For Slack instead, follow the [Slack connector setup](docs/slack.md) and set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_ALLOWED_USER_IDS`.
 
 ```sh
 docker compose up -d
@@ -95,8 +98,12 @@ and reverse-proxy that origin to the container's port 8787 (publish it in your c
 
 | Variable                    | Default                    | Purpose                                  |
 |-----------------------------|----------------------------|------------------------------------------|
-| `TELEGRAM_BOT_TOKEN`        | required                   | Bot token from @BotFather                |
-| `TELEGRAM_ALLOWED_USER_IDS` | required                   | Comma-separated numeric allowlist        |
+| `TELEGRAM_BOT_TOKEN`        | connector-dependent        | Bot token from @BotFather                |
+| `TELEGRAM_ALLOWED_USER_IDS` | connector-dependent        | Comma-separated numeric allowlist        |
+| `SLACK_BOT_TOKEN`           | connector-dependent        | Slack bot OAuth token (`xoxb-…`)         |
+| `SLACK_APP_TOKEN`           | connector-dependent        | Slack Socket Mode token (`xapp-…`)       |
+| `SLACK_ALLOWED_USER_IDS`    | connector-dependent        | Member IDs, or `*` for workspace members |
+| `SLACK_ADMIN_USER_IDS`      | unset                      | Members allowed to run global commands   |
 | `PUBLIC_URL`                | unset                      | Public HTTPS origin for the Mini App     |
 | `WIREBOT_TUNNEL`            | `auto`                     | `off` disables the quick-tunnel fallback |
 | `TELEGRAM_API_BASE`         | `https://api.telegram.org` | Alternate Bot API server for large files |
@@ -145,6 +152,12 @@ In the other direction, Wirebot uploads completed Codex image-generation results
 
 Telegram's hosted Bot API only allows bots to download files up to 20 MB and upload general files up to 50 MB. Wirebot still forwards the file metadata and a clear limitation notice when a download or upload is unavailable. Set `TELEGRAM_API_BASE` to a [local Bot API server](https://core.telegram.org/bots/api#using-a-local-bot-api-server) to remove the download limit and support larger uploads.
 
+## Slack connector
+
+Wirebot can additionally bridge Codex into Slack over [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode) — no public URL required. Direct messages stream progress like the Telegram private chat; in channels the bot answers mentions in threads, with each thread acting as its own Codex conversation. Approvals arrive as buttons, files flow in both directions, and commands are available as `/wirebot <subcommand>` (Slack reserves bare `/new`-style messages for its own slash-command system). Scheduled runs created from Slack notify back into the originating channel or thread.
+
+Set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_ALLOWED_USER_IDS` together to enable it. [docs/slack.md](docs/slack.md) walks through creating the Slack app from a pasteable manifest, collecting both tokens, and first steps. The settings Mini App stays Telegram-only because it authenticates through Telegram `initData`.
+
 ## Scheduled runs
 
 Ask Codex naturally, for example, “Every weekday at 9, check this project for failed CI runs” or “Revisit this task every hour and notify me only if something changed.” Wirebot exposes a host-managed `automation_update` tool to new Codex tasks and stores each schedule with an explicit time zone. A task created before upgrading does not have that tool in its persisted definition; send `/new` once before asking it to create or edit schedules. `/schedules` remains available for viewing them.
@@ -160,9 +173,9 @@ Scheduled runs follow the [Codex Desktop scheduled-task model](https://developer
 - Heartbeats can suppress unimportant results. Cron results notify by default, and delivery failures are recorded without rerunning already completed work.
 - Each schedule gets a small durable memory file under the workspace's `.wirebot/automations` directory, which the run reads and may update.
 
-Notifications deliberately do not change the active task, including in a Telegram chat without topics. Your next ordinary message still goes to the task you were already using. Replying to a scheduled notification also stays in that task, but Wirebot supplies the complete stored result as additional context even when Telegram split or truncated the visible message. **Continue this run** explicitly switches to the notification's source task when the conversation is idle; `/back` returns to the previous task.
+Notifications deliberately do not change the active task. Your next ordinary message still goes to the task you were already using. Replying to a scheduled notification also stays in that task, but Wirebot supplies the complete stored result as additional context even when the provider split or truncated the visible message. **Continue this run** explicitly switches to the notification's source task when the conversation is idle; `/back` returns to the previous task.
 
-Scheduling and delivery state use opaque provider references rather than Telegram message or chat fields. Telegram is the first adapter; future messaging providers can define their own destination and message identifier formats without changing the scheduler.
+Scheduling and delivery state use opaque provider references rather than provider-specific message or chat fields. Telegram and Slack each define their own destination and message identifier formats without changing the scheduler.
 
 Wirebot retains the latest 100 run and notification records for each schedule so local state stays bounded. Since there is no systemd in the container, processes the agent starts do not survive restarts — scheduled runs are the supported way to re-establish or monitor long-lived work.
 
@@ -192,7 +205,7 @@ Wirebot keeps the running Codex process synchronized using the [app-server mecha
 - Skills use Codex's built-in watcher plus a forced `skills/list` refresh. Explicit `$skill-name` mentions are sent as native skill inputs.
 - MCP definitions use `config/mcpServer/reload`. Codex queues refreshed MCP state for loaded threads, so it becomes active on their next turn.
 
-The runtime card in the Mini App shows the current outcome and offers **Apply changes** and **Restart Codex**. `/reload` and `/restart` provide the same private-chat controls. Restart is the fallback for startup-only state: Wirebot pauses new turns, lets active turns finish, restarts its child app-server with the same `CODEX_HOME`, reloads its resources, and lazily resumes persisted thread IDs. It does not restart the Telegram bridge or discard authentication and conversation history.
+The runtime card in the Mini App shows the current outcome and offers **Apply changes** and **Restart Codex**. `/reload` and `/restart` provide the same private-chat controls. Restart is the fallback for startup-only state: Wirebot pauses new turns, lets active turns finish, restarts its child app-server with the same `CODEX_HOME`, reloads its resources, and lazily resumes persisted thread IDs. It does not restart the messaging bridges or discard authentication and conversation history.
 
 ## Source development
 
@@ -216,9 +229,7 @@ docker build .     # the release image
 
 Source runs keep Codex's `workspace-write` sandbox default and store state under `./.wirebot`. They download the pinned Codex CLI on first start; cloudflared and curl-impersonate are invoked from PATH, where the container image bakes the pinned builds. Without cloudflared (or `PUBLIC_URL`) the quick tunnel is skipped, and without curl-impersonate voice messages are forwarded to Codex untranscribed. The compiled executable embeds the app version, the Codex pin, and bytecode with maximum optimizations; Mini App assets and the pinned toolchains are baked into the image alongside it.
 
-The handwritten application is strict TypeScript. Messaging transports depend only on `src/core/channel.ts`; Telegram is the first implementation.
-
-The previous mock-based unit suite has been removed. Tests are being rebuilt as end-to-end runs that exercise the actual container image.
+The handwritten application is strict TypeScript. Messaging transports depend only on `src/core/channel.ts`; Telegram and Slack implement the same contract.
 
 ### Codex protocol updates
 

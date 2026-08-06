@@ -131,6 +131,12 @@ export interface InboundMessage {
   readonly command?: InboundCommand;
   readonly attachments: readonly InboundAttachment[];
   readonly responder: MessageResponder;
+  /**
+   * Release provider-owned temporary resources after the message is fully
+   * handled. The message handler owns this callback, including across a
+   * deferred sign-in replay, and must invoke it at most once.
+   */
+  readonly dispose?: () => Promise<void>;
 }
 
 export type MessageHandler = (message: InboundMessage) => Promise<void>;

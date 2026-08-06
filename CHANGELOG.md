@@ -2,6 +2,14 @@
 
 All notable changes to Wirebot are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- A Slack connector over Socket Mode, including direct messages, mention-gated channel threads,
+  approvals, file transfer, voice transcription, scheduled notifications, `/wirebot` commands,
+  and an interactive Codex settings UI. Slack can run alongside Telegram or as the only connector.
+
 ## [0.1.0] - 2026-08-05
 
 Initial Wirebot release, forked from [Telex](https://github.com/sadfun/telex) 0.0.28 and synced with Telex through 0.0.34. The bridge behavior — conversations, scheduled runs, voice transcription, media handling, the settings Mini App — carries over; the product, runtime, and deployment model are new.
