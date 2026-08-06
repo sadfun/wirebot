@@ -1,6 +1,6 @@
 # 🤖 Wirebot
 
-Wirebot brings Codex to your messenger: a full Codex agent you talk to from Telegram or Slack, built on a transport layer designed so more messengers can follow.
+Wirebot brings Codex to your messenger: a full Codex agent you talk to from Telegram, Slack, or Discord, built on a transport layer designed so more messengers can follow.
 
 Think of it as OpenClaw or Hermes Agent with a different philosophy:
 
@@ -12,6 +12,7 @@ Out of the box:
 
 * **Rich Telegram I/O** — photos and files in both directions, voice messages with automatic transcription, forwarded and replied-to context, polls and other structured messages.
 * **Slack over Socket Mode** — direct messages, channel threads, approvals, files, commands, and scheduled notifications without a public webhook.
+* **Text-only Discord** — direct messages, isolated server threads, streaming, approvals, commands, settings, and scheduled notifications with no public endpoint.
 * **A real agent experience** — streamed replies and thinking, interactive approvals, persistent Codex threads, private conversations, and guest mentions.
 * **Scheduled runs** — describe an automation in plain language and Wirebot keeps it running, following Codex Desktop's scheduled-task model.
 * **Settings Mini App** — an authenticated in-Telegram UI for Codex configuration, skills, and schedules.
@@ -23,7 +24,7 @@ Out of the box:
 
 ### Run with Docker
 
-Requirements: Docker (or any OCI runtime) and at least one configured connector: Telegram credentials, Slack credentials, or both.
+Requirements: Docker (or any OCI runtime) and at least one configured Telegram, Slack, or Discord connector.
 
 Create a directory with a `docker-compose.yml`:
 
@@ -51,11 +52,14 @@ TELEGRAM_ALLOWED_USER_IDS=123456789
 
 For Slack instead, follow the [Slack connector setup](docs/slack.md) and set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_ALLOWED_USER_IDS`.
 
+For Discord, follow the [Discord connector setup](docs/discord.md) and set `DISCORD_BOT_TOKEN` and `DISCORD_ALLOWED_USER_IDS`.
+
 ```sh
 docker compose up -d
 ```
 
-Open a private chat with the bot and send `/start` to sign in to ChatGPT. No OpenAI API key is required.
+Open a private chat with the bot and start setup: send `/start` on Telegram or `/wirebot start` on
+Slack and Discord. No OpenAI API key is required.
 
 ### The machine model
 
@@ -104,6 +108,9 @@ and reverse-proxy that origin to the container's port 8787 (publish it in your c
 | `SLACK_APP_TOKEN`           | connector-dependent        | Slack Socket Mode token (`xapp-…`)       |
 | `SLACK_ALLOWED_USER_IDS`    | connector-dependent        | Member IDs, or `*` for workspace members |
 | `SLACK_ADMIN_USER_IDS`      | unset                      | Members allowed to run global commands   |
+| `DISCORD_BOT_TOKEN`         | connector-dependent        | Discord application bot token            |
+| `DISCORD_ALLOWED_USER_IDS`  | connector-dependent        | Comma-separated Discord user snowflakes  |
+| `DISCORD_ADMIN_USER_IDS`    | unset                      | Users allowed to run global commands     |
 | `PUBLIC_URL`                | unset                      | Public HTTPS origin for the Mini App     |
 | `WIREBOT_TUNNEL`            | `auto`                     | `off` disables the quick-tunnel fallback |
 | `TELEGRAM_API_BASE`         | `https://api.telegram.org` | Alternate Bot API server for large files |
@@ -158,6 +165,12 @@ Wirebot can additionally bridge Codex into Slack over [Socket Mode](https://docs
 
 Set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_ALLOWED_USER_IDS` together to enable it. [docs/slack.md](docs/slack.md) walks through creating the Slack app from a pasteable manifest, collecting both tokens, and first steps. The settings Mini App stays Telegram-only because it authenticates through Telegram `initData`.
 
+## Discord connector
+
+Wirebot connects through the Discord Gateway with [discord.js](https://github.com/discordjs/discord.js), so it needs no inbound webhook or public URL. Direct messages are ordinary Codex conversations. In a server, mention the bot in a text channel and Wirebot creates a dedicated public thread when Discord permissions allow it; subsequent messages in that bot-owned thread need no repeated mention. Mentions inside existing threads keep that thread as the conversation boundary. Native `/wirebot` commands, streamed progress, approval buttons, interactive Codex settings in DMs, and scheduled notifications all use the same persistent Codex tasks as the other connectors.
+
+The connector is deliberately text-only. It does not download Discord attachments, stickers, or polls, and it never uploads generated files; both inbound and outbound omissions are stated in the conversation. Model-authored mentions and link previews are suppressed on every outbound create and edit. Set `DISCORD_BOT_TOKEN` and `DISCORD_ALLOWED_USER_IDS` together to enable it, then follow [docs/discord.md](docs/discord.md) for the Developer Portal intent, invite permissions, user IDs, and first run.
+
 ## Scheduled runs
 
 Ask Codex naturally, for example, “Every weekday at 9, check this project for failed CI runs” or “Revisit this task every hour and notify me only if something changed.” Wirebot exposes a host-managed `automation_update` tool to new Codex tasks and stores each schedule with an explicit time zone. A task created before upgrading does not have that tool in its persisted definition; send `/new` once before asking it to create or edit schedules. `/schedules` remains available for viewing them.
@@ -175,7 +188,7 @@ Scheduled runs follow the [Codex Desktop scheduled-task model](https://developer
 
 Notifications deliberately do not change the active task. Your next ordinary message still goes to the task you were already using. Replying to a scheduled notification also stays in that task, but Wirebot supplies the complete stored result as additional context even when the provider split or truncated the visible message. **Continue this run** explicitly switches to the notification's source task when the conversation is idle; `/back` returns to the previous task.
 
-Scheduling and delivery state use opaque provider references rather than provider-specific message or chat fields. Telegram and Slack each define their own destination and message identifier formats without changing the scheduler.
+Scheduling and delivery state use opaque provider references rather than provider-specific message or chat fields. Telegram, Slack, and Discord each define their own destination and message identifier formats without changing the scheduler.
 
 Wirebot retains the latest 100 run and notification records for each schedule so local state stays bounded. Since there is no systemd in the container, processes the agent starts do not survive restarts — scheduled runs are the supported way to re-establish or monitor long-lived work.
 
@@ -229,7 +242,7 @@ docker build .     # the release image
 
 Source runs keep Codex's `workspace-write` sandbox default and store state under `./.wirebot`. They download the pinned Codex CLI on first start; cloudflared and curl-impersonate are invoked from PATH, where the container image bakes the pinned builds. Without cloudflared (or `PUBLIC_URL`) the quick tunnel is skipped, and without curl-impersonate voice messages are forwarded to Codex untranscribed. The compiled executable embeds the app version, the Codex pin, and bytecode with maximum optimizations; Mini App assets and the pinned toolchains are baked into the image alongside it.
 
-The handwritten application is strict TypeScript. Messaging transports depend only on `src/core/channel.ts`; Telegram and Slack implement the same contract.
+The handwritten application is strict TypeScript. Messaging transports depend only on `src/core/channel.ts`; Telegram, Slack, and Discord implement the same contract.
 
 ### Codex protocol updates
 

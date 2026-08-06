@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { ScheduledRunsEngine } from "./automations/engine.js";
 import { AutomationStore } from "./automations/store.js";
+import { DiscordChannel } from "./channels/discord/channel.js";
 import { SlackChannel } from "./channels/slack/channel.js";
 import { TelegramChannel } from "./channels/telegram/channel.js";
 import { CodexConfigService } from "./codex/config-service.js";
@@ -216,7 +217,11 @@ export async function runWirebot(): Promise<void> {
             logger.child({ component: "slack" }),
             configService,
           );
-    const channels = [telegram, slack].filter(
+    const discord =
+      config.discord === undefined
+        ? undefined
+        : new DiscordChannel(config.discord, logger.child({ component: "discord" }), configService);
+    const channels = [telegram, slack, discord].filter(
       (channel): channel is NonNullable<typeof channel> => channel !== undefined,
     );
     const scheduledRuns = new ScheduledRunsEngine({
@@ -248,6 +253,7 @@ export async function runWirebot(): Promise<void> {
       miniApp: config.telegram === undefined ? "disabled" : `${config.host}:${config.port}`,
       telegram: telegram === undefined ? "disabled" : "enabled",
       slack: slack === undefined ? "disabled" : "enabled",
+      discord: discord === undefined ? "disabled" : "enabled",
     });
 
     await shutdown.promise;

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Wirebot — a Telegram and Slack bridge for the OpenAI Codex app-server.",
+  "description": "Wirebot — a Telegram, Slack, and Discord bridge for the OpenAI Codex app-server.",
   "license": "FSL-1.1-MIT",
   "homepage": "https://github.com/sadfun/wirebot#readme",
   "bugs": {
@@ -34,6 +34,7 @@
     "@slack/web-api": "^8.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "discord.js": "^14.27.0",
     "grammy": "^1.45.1",
     "lucide-react": "^0.468.0",
     "marked": "^18.0.6",

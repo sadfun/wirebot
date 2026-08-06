@@ -2,7 +2,7 @@ services:
   wirebot:
     image: ghcr.io/sadfun/wirebot:latest
     restart: unless-stopped
-    # Configure Telegram, Slack, or both; see .env.example for connector and
+    # Configure Telegram, Slack, Discord, or any combination; see .env.example for connector and
     # runtime variables (PUBLIC_URL, WIREBOT_TUNNEL, and others).
     env_file: .env
     volumes:

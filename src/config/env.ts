@@ -12,6 +12,9 @@ const envSchema = z.object({
   SLACK_APP_TOKEN: z.string().startsWith("xapp-").optional(),
   SLACK_ALLOWED_USER_IDS: z.string().min(1).optional(),
   SLACK_ADMIN_USER_IDS: z.string().min(1).optional(),
+  DISCORD_BOT_TOKEN: z.string().min(20).optional(),
+  DISCORD_ALLOWED_USER_IDS: z.string().min(1).optional(),
+  DISCORD_ADMIN_USER_IDS: z.string().min(1).optional(),
   PUBLIC_URL: z
     .url()
     .refine((value) => new URL(value).protocol === "https:", "PUBLIC_URL must use HTTPS")
@@ -40,6 +43,9 @@ export const bridgeOnlyEnvironmentKeys: ReadonlySet<keyof z.infer<typeof envSche
   "CODEX_API_KEY",
   "CODEX_CHATGPT_ACCOUNT_ID",
   "CODEX_CHATGPT_TOKEN",
+  "DISCORD_ADMIN_USER_IDS",
+  "DISCORD_ALLOWED_USER_IDS",
+  "DISCORD_BOT_TOKEN",
   "PUBLIC_URL",
   "SLACK_ADMIN_USER_IDS",
   "SLACK_ALLOWED_USER_IDS",
@@ -72,11 +78,19 @@ export interface TelegramConfig {
   readonly allowedUserIds: ReadonlySet<number>;
 }
 
+export interface DiscordConfig {
+  readonly botToken: string;
+  readonly allowedUserIds: ReadonlySet<string>;
+  /** When set, instance-wide commands (config, login, restart…) are limited to these users. */
+  readonly adminUserIds: ReadonlySet<string> | undefined;
+}
+
 export interface AppConfig {
   readonly telegram: TelegramConfig | undefined;
   readonly telegramApiBase: string;
   readonly telegramPollTimeout: number;
   readonly slack: SlackConfig | undefined;
+  readonly discord: DiscordConfig | undefined;
   readonly publicUrl: string | undefined;
   readonly tunnelMode: "auto" | "off";
   readonly container: boolean;
@@ -95,9 +109,10 @@ export function loadAppConfig(environment: NodeJS.ProcessEnv = process.env): App
   const parsed = envSchema.parse(environment);
   const telegram = telegramConfigFromParsed(parsed);
   const slack = slackConfigFromParsed(parsed);
-  if (telegram === undefined && slack === undefined) {
+  const discord = discordConfigFromParsed(parsed);
+  if (telegram === undefined && slack === undefined && discord === undefined) {
     throw new Error(
-      "Configure at least one connector: Telegram (TELEGRAM_BOT_TOKEN + TELEGRAM_ALLOWED_USER_IDS) or Slack (SLACK_BOT_TOKEN + SLACK_APP_TOKEN + SLACK_ALLOWED_USER_IDS)",
+      "Configure at least one connector: Telegram (TELEGRAM_BOT_TOKEN + TELEGRAM_ALLOWED_USER_IDS), Slack (SLACK_BOT_TOKEN + SLACK_APP_TOKEN + SLACK_ALLOWED_USER_IDS), or Discord (DISCORD_BOT_TOKEN + DISCORD_ALLOWED_USER_IDS)",
     );
   }
   const codexChatgptAuth = resolveChatgptAuth(parsed);
@@ -110,6 +125,7 @@ export function loadAppConfig(environment: NodeJS.ProcessEnv = process.env): App
     telegramApiBase: parsed.TELEGRAM_API_BASE.replace(/\/$/, ""),
     telegramPollTimeout: parsed.TELEGRAM_POLL_TIMEOUT,
     slack,
+    discord,
     publicUrl: parsed.PUBLIC_URL?.replace(/\/$/, ""),
     tunnelMode: parsed.WIREBOT_TUNNEL,
     container: parsed.WIREBOT_CONTAINER === "1",
@@ -217,6 +233,43 @@ function parseSlackUserIds(raw: string): ReadonlySet<string> {
           "Slack user IDs look like U0123ABCDEF, or * for every workspace member",
         )
         .parse(part.trim().toUpperCase()),
+    ),
+  );
+}
+
+function discordConfigFromParsed(parsed: z.infer<typeof envSchema>): DiscordConfig | undefined {
+  const fields = [parsed.DISCORD_BOT_TOKEN, parsed.DISCORD_ALLOWED_USER_IDS];
+  if (fields.every((field) => field === undefined)) {
+    if (parsed.DISCORD_ADMIN_USER_IDS !== undefined) {
+      throw new Error("DISCORD_ADMIN_USER_IDS requires the Discord connector to be configured");
+    }
+    return undefined;
+  }
+  if (fields.some((field) => field === undefined)) {
+    throw new Error(
+      "The Discord connector needs DISCORD_BOT_TOKEN and DISCORD_ALLOWED_USER_IDS set together",
+    );
+  }
+  return {
+    botToken: parsed.DISCORD_BOT_TOKEN ?? "",
+    allowedUserIds: parseDiscordUserIds(parsed.DISCORD_ALLOWED_USER_IDS ?? ""),
+    adminUserIds:
+      parsed.DISCORD_ADMIN_USER_IDS === undefined
+        ? undefined
+        : parseDiscordUserIds(parsed.DISCORD_ADMIN_USER_IDS),
+  };
+}
+
+function parseDiscordUserIds(raw: string): ReadonlySet<string> {
+  return new Set(
+    raw.split(",").map((part) =>
+      z
+        .string()
+        .regex(
+          /^\d{15,20}$/u,
+          "Discord user IDs are numeric snowflakes, such as 123456789012345678",
+        )
+        .parse(part.trim()),
     ),
   );
 }

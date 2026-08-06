@@ -141,6 +141,33 @@ export interface InboundMessage {
 
 export type MessageHandler = (message: InboundMessage) => Promise<void>;
 
+/**
+ * Presentation traits a connector declares about itself, for shared code that
+ * only holds a channel name (bridge texts, Codex prompt context).
+ */
+export interface ChannelTraits {
+  /** Render a bot command the way users invoke it on this connector. */
+  commandText(command: string): string;
+  /** Whether Wirebot delivers local files as native attachments on this connector. */
+  readonly supportsFileDelivery: boolean;
+}
+
+const defaultTraits: ChannelTraits = {
+  commandText: (command) => `/${command}`,
+  supportsFileDelivery: true,
+};
+
+const registeredTraits = new Map<string, ChannelTraits>();
+
+/** Channels whose traits differ from the defaults register them at construction. */
+export function registerChannelTraits(channel: string, traits: ChannelTraits): void {
+  registeredTraits.set(channel, traits);
+}
+
+export function channelTraits(channel: string): ChannelTraits {
+  return registeredTraits.get(channel) ?? defaultTraits;
+}
+
 export interface MessagingChannel {
   readonly name: string;
   /** Re-check a persisted provider principal before unattended work executes. */

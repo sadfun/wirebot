@@ -58,10 +58,20 @@ export function splitMessageText(text: string, limit: number): readonly string[]
   while (remaining.length > limit) {
     const candidate = remaining.slice(0, limit);
     const newline = candidate.lastIndexOf("\n");
-    const splitAt = newline > limit / 2 ? newline : limit;
+    const preferredSplit = newline > limit / 2 ? newline : limit;
+    const splitAt = safeUtf16Boundary(remaining, preferredSplit);
     chunks.push(remaining.slice(0, splitAt));
     remaining = remaining.slice(splitAt).replace(/^\n/, "");
   }
   if (remaining.length > 0) chunks.push(remaining);
   return chunks;
+}
+
+function safeUtf16Boundary(text: string, index: number): number {
+  if (index <= 0 || index >= text.length) return index;
+  const before = text.charCodeAt(index - 1);
+  const after = text.charCodeAt(index);
+  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff
+    ? index - 1
+    : index;
 }
