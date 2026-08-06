@@ -2,7 +2,7 @@
 
 All notable changes to Wirebot are documented in this file.
 
-## [Unreleased]
+## [0.2.0] - 2026-08-07
 
 ### Added
 
