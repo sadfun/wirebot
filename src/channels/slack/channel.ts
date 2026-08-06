@@ -8,17 +8,19 @@ import {
   conversationScopedCommands,
   instanceAdminCommands,
 } from "../../core/bridge.js";
-import type {
-  ChoiceOption,
-  DeliveryReceipt,
-  InboundAttachment,
-  InboundMessage,
-  MessageHandler,
-  MessagingChannel,
-  OutboundMessage,
-  ProviderReference,
+import {
+  type ChoiceOption,
+  type DeliveryReceipt,
+  type InboundAttachment,
+  type InboundMessage,
+  type MessageHandler,
+  type MessagingChannel,
+  type OutboundMessage,
+  type ProviderReference,
+  registerChannelTraits,
 } from "../../core/channel.js";
 import { type Deferred, deferred } from "../../shared/async.js";
+import { trimInsertionOrdered, trimInsertionOrderedMap } from "../../shared/collections.js";
 import { errorMessage } from "../../shared/errors.js";
 import type { Logger } from "../../shared/logger.js";
 import { isWorkspaceMember } from "./authorization.js";
@@ -153,6 +155,10 @@ export class SlackChannel implements MessagingChannel {
     this.#adminUserIds = config.adminUserIds;
     this.#attachmentDirectory = attachmentDirectory;
     this.#logger = logger;
+    registerChannelTraits(this.name, {
+      commandText: (command) => `/wirebot ${command}`,
+      supportsFileDelivery: true,
+    });
     this.#web = new WebClient(config.botToken, { logLevel: LogLevel.ERROR });
     this.#socket = new SocketModeClient({ appToken: config.appToken, logLevel: LogLevel.ERROR });
     this.#api = webMessagingApi(this.#web);
@@ -920,20 +926,4 @@ function firstNonEmpty(...values: readonly (string | undefined)[]): string | und
     if (value !== undefined && value.trim().length > 0) return value;
   }
   return undefined;
-}
-
-function trimInsertionOrdered(set: Set<string>, limit: number): void {
-  while (set.size > limit) {
-    const oldest = set.values().next().value;
-    if (oldest === undefined) return;
-    set.delete(oldest);
-  }
-}
-
-function trimInsertionOrderedMap(map: Map<string, string>, limit: number): void {
-  while (map.size > limit) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) return;
-    map.delete(oldest);
-  }
 }

@@ -5,48 +5,26 @@ import {
   type MessageActionRowComponentBuilder,
   StringSelectMenuBuilder,
 } from "discord.js";
-import {
-  ConfigValidationError,
-  type EditableConfigSnapshot,
-  type ModelCapability,
-} from "../../codex/config-service.js";
+import type { EditableConfigSnapshot } from "../../codex/config-service.js";
 import { errorMessage } from "../../shared/errors.js";
 import type { Logger } from "../../shared/logger.js";
+import {
+  applyConfigValue,
+  type CodexConfigAccess,
+  type ConfigFieldKey,
+  configFieldKeys,
+  defaultOptionValue,
+  displayValue,
+  fieldKey,
+  fieldLabels,
+  fieldNotes,
+  fieldOptions,
+} from "../config-fields.js";
 import type { DiscordActionRow, DiscordMessagingApi } from "./reply.js";
 
-export interface CodexConfigAccess {
-  read(): Promise<EditableConfigSnapshot>;
-  update(input: unknown): Promise<unknown>;
-}
+export type { CodexConfigAccess } from "../config-fields.js";
 
 export const discordConfigActionPrefix = "wirebot_cfg";
-
-const configFieldKeys = [
-  "model",
-  "model_reasoning_effort",
-  "service_tier",
-  "approval_policy",
-  "sandbox_mode",
-  "web_search",
-] as const;
-
-type ConfigFieldKey = (typeof configFieldKeys)[number];
-
-const fieldLabels: Readonly<Record<ConfigFieldKey, string>> = {
-  model: "Model",
-  model_reasoning_effort: "Reasoning effort",
-  service_tier: "Speed",
-  approval_policy: "Approvals",
-  sandbox_mode: "Sandbox",
-  web_search: "Web search",
-};
-
-const defaultOptionValue = "__default__";
-
-interface FieldOption {
-  readonly value: string | null;
-  readonly label: string;
-}
 
 interface DiscordConfigScreen {
   readonly content: string;
@@ -84,21 +62,7 @@ export class DiscordConfigUi {
   ): Promise<void> {
     const field = fieldKey(rawField);
     if (field === undefined) return;
-    const value = encodedValue === defaultOptionValue ? null : decodeURIComponent(encodedValue);
-    let status: string;
-    try {
-      const snapshot = await this.#config.read();
-      await this.#config.update({
-        expectedVersion: snapshot.version,
-        values: { [field]: value },
-      });
-      status = `✅ ${fieldLabels[field]} updated.`;
-    } catch (error) {
-      status =
-        error instanceof ConfigValidationError
-          ? `⚠️ ${error.issues.map((issue) => issue.message).join(" ") || "The change was rejected."}`
-          : `⚠️ ${errorMessage(error)}`;
-    }
+    const status = await applyConfigValue(this.#config, field, encodedValue);
     await this.showOverview(channelId, messageId, status);
   }
 
@@ -160,6 +124,7 @@ function pickerScreen(
   snapshot: EditableConfigSnapshot,
   field: ConfigFieldKey,
 ): DiscordConfigScreen {
+  const note = fieldNotes[field];
   const current = snapshot.values[field];
   const options = fieldOptions(snapshot, field)
     .map((option) => ({
@@ -172,8 +137,12 @@ function pickerScreen(
     .setCustomId(`${discordConfigActionPrefix}:back`)
     .setLabel("Back")
     .setStyle(ButtonStyle.Secondary);
+  const content = [
+    `**${fieldLabels[field]}** — current: ${displayValue(snapshot, field)}`,
+    ...(note === undefined ? [] : [note]),
+  ].join("\n");
   return {
-    content: `**${fieldLabels[field]}** — current: ${displayValue(snapshot, field)}`,
+    content,
     components:
       options.length === 0
         ? [row(back)]
@@ -193,71 +162,4 @@ function row(
   component: StringSelectMenuBuilder | ButtonBuilder,
 ): ActionRowBuilder<MessageActionRowComponentBuilder> {
   return new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(component);
-}
-
-function fieldKey(candidate: string | undefined): ConfigFieldKey | undefined {
-  return configFieldKeys.find((key) => key === candidate);
-}
-
-function currentModel(snapshot: EditableConfigSnapshot): ModelCapability | undefined {
-  const selected = snapshot.values.model;
-  if (selected !== null) {
-    const match = snapshot.capabilities.models.find((model) => model.model === selected);
-    if (match !== undefined) return match;
-  }
-  return (
-    snapshot.capabilities.models.find((model) => model.isDefault) ?? snapshot.capabilities.models[0]
-  );
-}
-
-function displayValue(snapshot: EditableConfigSnapshot, field: ConfigFieldKey): string {
-  const raw = snapshot.values[field];
-  if (raw === null || raw === undefined) return "default";
-  return typeof raw === "string" ? raw : "granular";
-}
-
-function fieldOptions(snapshot: EditableConfigSnapshot, field: ConfigFieldKey): FieldOption[] {
-  const model = currentModel(snapshot);
-  switch (field) {
-    case "model":
-      return snapshot.capabilities.models.map((candidate) => ({
-        value: candidate.model,
-        label: `${candidate.displayName}${candidate.isDefault ? " (default)" : ""}`,
-      }));
-    case "model_reasoning_effort":
-      return [
-        ...(model?.supportedReasoningEfforts ?? []).map((option) => ({
-          value: option.reasoningEffort,
-          label: option.reasoningEffort,
-        })),
-        { value: null, label: `default (${model?.defaultReasoningEffort ?? "model default"})` },
-      ];
-    case "service_tier":
-      return [
-        ...(model?.serviceTiers ?? []).map((tier) => ({ value: tier.id, label: tier.name })),
-        { value: null, label: "standard (default)" },
-      ];
-    case "approval_policy":
-      return [
-        { value: "untrusted", label: "untrusted — approve most actions" },
-        { value: "on-request", label: "on-request — Codex decides when to ask" },
-        { value: "never", label: "never — fully unattended" },
-        { value: null, label: "default" },
-      ];
-    case "sandbox_mode":
-      return [
-        { value: "read-only", label: "read-only" },
-        { value: "workspace-write", label: "workspace-write" },
-        { value: "danger-full-access", label: "danger-full-access" },
-        { value: null, label: "default" },
-      ];
-    case "web_search":
-      return [
-        { value: "disabled", label: "disabled" },
-        { value: "cached", label: "cached" },
-        { value: "indexed", label: "indexed" },
-        { value: "live", label: "live" },
-        { value: null, label: "default" },
-      ];
-  }
 }

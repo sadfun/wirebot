@@ -1,3 +1,4 @@
+import { formatBytes } from "../../shared/text.js";
 import { mrkdwnToPlainText } from "./format.js";
 
 /** Subset of a Slack file object relevant to attachment handling. */
@@ -133,10 +134,4 @@ export function slackAttachmentKind(file: SlackFile): "image" | "file" | "voice"
   if (mimetype.startsWith("image/")) return "image";
   if (mimetype.startsWith("audio/")) return "voice";
   return "file";
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1_024) return `${bytes} B`;
-  if (bytes < 1_024 * 1_024) return `${Math.round(bytes / 1_024)} KB`;
-  return `${Math.round((bytes / (1_024 * 1_024)) * 10) / 10} MB`;
 }

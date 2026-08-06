@@ -7,12 +7,13 @@ import type { GetAccountResponse } from "../generated/codex/v2/GetAccountRespons
 import type { LoginAccountResponse } from "../generated/codex/v2/LoginAccountResponse.js";
 import { BridgeError, errorMessage } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
-import type {
-  InboundCommand,
-  InboundMessage,
-  MessageHandler,
-  MessageResponder,
-  ProviderReference,
+import {
+  channelTraits,
+  type InboundCommand,
+  type InboundMessage,
+  type MessageHandler,
+  type MessageResponder,
+  type ProviderReference,
 } from "./channel.js";
 
 const introText =
@@ -625,5 +626,5 @@ function messageConversation(message: InboundMessage): ProviderReference {
 }
 
 function commandText(channel: string, command: string): string {
-  return channel === "slack" || channel === "discord" ? `/wirebot ${command}` : `/${command}`;
+  return channelTraits(channel).commandText(command);
 }

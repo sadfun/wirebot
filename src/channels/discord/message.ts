@@ -1,5 +1,5 @@
 import { type Message, MessageType } from "discord.js";
-import { compactTruncate } from "../../shared/text.js";
+import { compactTruncate, formatBytes } from "../../shared/text.js";
 
 export interface DiscordIncomingRoute {
   readonly isPrivate: boolean;
@@ -42,7 +42,11 @@ export function parseDiscordCommand(
 }
 
 export function normalizeDiscordMessage(message: Message, botUserId: string): string {
-  const content = discordTextContent(message, botUserId);
+  return withDiscordMediaNotices(message, discordTextContent(message, botUserId));
+}
+
+/** Append omission notices for media the text-only connector cannot forward. */
+export function withDiscordMediaNotices(message: Message, content: string): string {
   const media = discordMediaDescriptions(message);
   if (media.length === 0) return content;
   const notice = media.map((item) => `[Discord text-only media omitted: ${item}]`).join("\n");
@@ -85,7 +89,9 @@ export function formatDiscordThreadContext(
     .filter((line) => line.length > 0);
   if (lines.length === 0) return undefined;
   let dropped = 0;
-  while (lines.length > 1 && lines.join("\n").length > characterBudget) {
+  let joinedLength = lines.reduce((total, line) => total + line.length + 1, -1);
+  while (lines.length > 1 && joinedLength > characterBudget) {
+    joinedLength -= (lines[0]?.length ?? 0) + 1;
     lines.shift();
     dropped += 1;
   }
@@ -128,17 +134,23 @@ function hasMedia(message: Pick<Message, "attachments" | "poll" | "stickers">): 
   return message.attachments.size > 0 || message.stickers.size > 0 || message.poll !== null;
 }
 
-function cleanDiscordText(content: string, botUserId: string): string {
-  return content
-    .replaceAll(new RegExp(`<@!?${escapeRegExp(botUserId)}>`, "gu"), " ")
-    .replaceAll(/[ \t]{2,}/gu, " ")
-    .trim();
+let cachedMention: { readonly botUserId: string; readonly pattern: RegExp } | undefined;
+
+function botMentionPattern(botUserId: string): RegExp {
+  if (cachedMention?.botUserId !== botUserId) {
+    cachedMention = {
+      botUserId,
+      pattern: new RegExp(`<@!?${escapeRegExp(botUserId)}>`, "gu"),
+    };
+  }
+  return cachedMention.pattern;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1_024) return `${bytes} B`;
-  if (bytes < 1_024 * 1_024) return `${Math.round(bytes / 1_024)} KB`;
-  return `${Math.round((bytes / (1_024 * 1_024)) * 10) / 10} MB`;
+function cleanDiscordText(content: string, botUserId: string): string {
+  return content
+    .replaceAll(botMentionPattern(botUserId), " ")
+    .replaceAll(/[ \t]{2,}/gu, " ")
+    .trim();
 }
 
 function escapeRegExp(value: string): string {

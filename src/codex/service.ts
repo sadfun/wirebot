@@ -1,9 +1,10 @@
-import type {
-  ChoiceOption,
-  InboundAttachment,
-  MessageResponder,
-  OutboundAttachment,
-  ProviderReference,
+import {
+  type ChoiceOption,
+  channelTraits,
+  type InboundAttachment,
+  type MessageResponder,
+  type OutboundAttachment,
+  type ProviderReference,
 } from "../core/channel.js";
 import type { ConversationStore } from "../core/conversation-store.js";
 import type { RequestId } from "../generated/codex/RequestId.js";
@@ -1123,13 +1124,12 @@ function createTurnInput(
 
 function createRemoteClientContext(connector: string): ApplicationContext {
   const connectorName = connectorDisplayName(connector);
-  const fileDelivery =
-    connector.trim().toLowerCase() === "discord"
-      ? `File delivery:
-- This Discord connector is text-only: it cannot receive or send native file attachments.
+  const fileDelivery = !channelTraits(connector).supportsFileDelivery
+    ? `File delivery:
+- This ${connectorName} connector is text-only: it cannot receive or send native file attachments.
 - Keep deliverables useful inline whenever practical. If work must be saved locally, name the workspace-relative path in plain text and explain that the user needs another access path; do not promise an upload or format the path as a downloadable link.
-- Codex-generated images and other local output files are not delivered automatically through Discord.`
-      : `File delivery:
+- Codex-generated images and other local output files are not delivered automatically through ${connectorName}.`
+    : `File delivery:
 - ${connectorName} can receive files as native attachments through Wirebot.
 - When the user asks for a report, archive, image, or another local deliverable, save it inside the workspace and include a Markdown link to its workspace-relative path in the final response, for example \`[Download report](artifacts/report.pdf)\`. Wirebot resolves that link and uploads the file; do not use a file:// URL.
 - Link only files deliberately intended for the user. Never attach secrets, credentials, environment files, authentication data, or unrelated workspace files.

@@ -13,7 +13,9 @@ import type {
   ProgressSnapshot,
   SendOptions,
 } from "../../core/channel.js";
+import { errorMessage } from "../../shared/errors.js";
 import type { Logger } from "../../shared/logger.js";
+import { decodeBase64UrlJson, encodeBase64UrlJson, truncate } from "../../shared/text.js";
 import { formatThinkingBlock, splitMessageText } from "../progress.js";
 
 export const discordTextLimit = 2_000;
@@ -216,7 +218,7 @@ export class DiscordReplyStream implements OutboundStream {
       })
       .catch((error: unknown) => {
         this.#logger.debug("Discord progress message could not be posted", {
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage(error),
         });
       });
     this.#starting = post;
@@ -237,7 +239,7 @@ export class DiscordReplyStream implements OutboundStream {
     const reasoning = (progress.summary ?? progress.message)?.trim();
     if (reasoning !== undefined && reasoning.length > 0 && reasoning !== this.#lastReasoning) {
       this.#lastReasoning = reasoning;
-      this.#logger.debug("Codex reasoning", { text: truncateForLog(reasoning, 600) });
+      this.#logger.debug("Codex reasoning", { text: truncate(reasoning, 600) });
     }
     this.#progress = progress;
     this.scheduleDraft();
@@ -285,7 +287,7 @@ export class DiscordReplyStream implements OutboundStream {
         })
         .catch((error: unknown) => {
           this.#logger.debug("Discord progress freeze failed", {
-            error: error instanceof Error ? error.message : String(error),
+            error: errorMessage(error),
           });
         });
     }
@@ -296,7 +298,7 @@ export class DiscordReplyStream implements OutboundStream {
       } catch (error) {
         undelivered += 1;
         this.#logger.warn("Discord final text delivery failed", {
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage(error),
         });
       }
     }
@@ -342,7 +344,7 @@ export class DiscordReplyStream implements OutboundStream {
     this.#draftDirty = false;
     const update = this.flushDraft().catch((error: unknown) => {
       this.#logger.debug("Discord draft update failed", {
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
       });
     });
     this.#draftInFlight = update;
@@ -382,33 +384,21 @@ export function choicePromptText(prompt: string, options: readonly ChoiceOption[
     .map((option) => `${option.label}: ${option.description}`)
     .join("\n");
   const body = details.length === 0 ? prompt : `${prompt}\n\n${details}`;
-  return body.length <= discordChoiceTextLimit
-    ? body
-    : `${body.slice(0, discordChoiceTextLimit - 1)}…`;
+  return truncate(body, discordChoiceTextLimit);
 }
 
-export function choiceRows(token: string, options: readonly ChoiceOption[]): DiscordActionRow[] {
-  return chunkButtons(
-    options.map((option, index) =>
-      new ButtonBuilder()
-        .setCustomId(`wirebot_choice:${token}:${index}`)
-        .setLabel(option.label.slice(0, 80))
-        .setStyle(ButtonStyle.Primary),
-    ),
-  );
-}
-
-export function disabledChoiceRows(
+export function choiceRows(
   token: string,
   options: readonly ChoiceOption[],
+  disabled = false,
 ): DiscordActionRow[] {
   return chunkButtons(
     options.map((option, index) =>
       new ButtonBuilder()
         .setCustomId(`wirebot_choice:${token}:${index}`)
         .setLabel(option.label.slice(0, 80))
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(true),
+        .setStyle(disabled ? ButtonStyle.Secondary : ButtonStyle.Primary)
+        .setDisabled(disabled),
     ),
   );
 }
@@ -418,9 +408,7 @@ export function decodeDiscordCommandId(
 ): Readonly<{ name: string; args: string }> | undefined {
   if (!customId.startsWith("wirebot_cmd:")) return undefined;
   try {
-    const parsed = JSON.parse(
-      Buffer.from(customId.slice("wirebot_cmd:".length), "base64url").toString("utf8"),
-    ) as unknown;
+    const parsed = decodeBase64UrlJson(customId.slice("wirebot_cmd:".length));
     if (typeof parsed !== "object" || parsed === null) return undefined;
     const name = Reflect.get(parsed, "name");
     const args = Reflect.get(parsed, "args");
@@ -435,8 +423,7 @@ export function decodeDiscordCommandId(
 function commandRows(message: OutboundMessage, logger: Logger): DiscordActionRow[] {
   const buttons: ButtonBuilder[] = [];
   for (const action of message.actions ?? []) {
-    const encoded = Buffer.from(JSON.stringify(action.command), "utf8").toString("base64url");
-    const customId = `wirebot_cmd:${encoded}`;
+    const customId = `wirebot_cmd:${encodeBase64UrlJson(action.command)}`;
     if (customId.length > 100 || !/^[a-z][a-z0-9_]*$/u.test(action.command.name)) {
       logger.warn("Dropped a Discord command action", { command: action.command.name });
       continue;
@@ -487,9 +474,4 @@ function withAttachmentNotices(text: string, attachments: readonly OutboundAttac
 
 function nonEmptyChunks(text: string): readonly string[] {
   return text.length === 0 ? [] : splitMessageText(text, discordTextLimit);
-}
-
-function truncateForLog(text: string, limit: number): string {
-  const compact = text.trim();
-  return compact.length <= limit ? compact : `${compact.slice(0, limit - 1)}…`;
 }

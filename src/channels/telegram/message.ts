@@ -8,7 +8,7 @@ import type {
   RichText,
 } from "grammy/types";
 import { assertNever } from "../../shared/errors.js";
-import { capitalize, truncate } from "../../shared/text.js";
+import { capitalize, formatBytes, truncate } from "../../shared/text.js";
 
 export interface TelegramFileReference {
   readonly fileId: string;
@@ -28,12 +28,6 @@ export function describeTelegramFile(file: TelegramFileReference): string {
     file.size === undefined ? undefined : formatBytes(file.size),
   ].filter((value): value is string => value !== undefined);
   return metadata.length === 0 ? file.description : `${file.description} (${metadata.join(", ")})`;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1_024) return `${bytes} B`;
-  if (bytes < 1_024 * 1_024) return `${Math.round(bytes / 1_024)} KB`;
-  return `${Math.round((bytes / (1_024 * 1_024)) * 10) / 10} MB`;
 }
 
 export interface NormalizedTelegramMessage {

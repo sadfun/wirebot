@@ -1,5 +1,4 @@
 import {
-  type AnyThreadChannel,
   type ButtonInteraction,
   ChannelType,
   type ChatInputCommandInteraction,
@@ -20,16 +19,18 @@ import {
   conversationScopedCommands,
   instanceAdminCommands,
 } from "../../core/bridge.js";
-import type {
-  ChoiceOption,
-  DeliveryReceipt,
-  InboundMessage,
-  MessageHandler,
-  MessagingChannel,
-  OutboundMessage,
-  ProviderReference,
+import {
+  type ChoiceOption,
+  type DeliveryReceipt,
+  type InboundMessage,
+  type MessageHandler,
+  type MessagingChannel,
+  type OutboundMessage,
+  type ProviderReference,
+  registerChannelTraits,
 } from "../../core/channel.js";
 import { type Deferred, deferred } from "../../shared/async.js";
+import { trimInsertionOrdered } from "../../shared/collections.js";
 import { errorMessage } from "../../shared/errors.js";
 import type { Logger } from "../../shared/logger.js";
 import { type CodexConfigAccess, DiscordConfigUi, discordConfigActionPrefix } from "./config-ui.js";
@@ -39,9 +40,9 @@ import {
   discordThreadName,
   formatDiscordThreadContext,
   hasDiscordMedia,
-  normalizeDiscordMessage,
   parseDiscordCommand,
   routeDiscordMessage,
+  withDiscordMediaNotices,
 } from "./message.js";
 import {
   discordDeliveryTarget,
@@ -51,10 +52,10 @@ import {
 import {
   choicePromptText,
   choiceRows,
+  type DiscordInitialReply,
   type DiscordMessagingApi,
   DiscordResponder,
   decodeDiscordCommandId,
-  disabledChoiceRows,
   publishDiscordMessage,
 } from "./reply.js";
 
@@ -77,6 +78,8 @@ interface DiscordReplyRoute {
 const recentEventLimit = 1_000;
 const engagedThreadLimit = 500;
 const choiceTimeoutMs = 5 * 60 * 1_000;
+const adminOnlyText =
+  "This command changes Wirebot for everyone using it and is limited to its admins.";
 
 export class DiscordChannel implements MessagingChannel {
   public readonly name = "discord";
@@ -98,6 +101,10 @@ export class DiscordChannel implements MessagingChannel {
     this.#allowedUserIds = config.allowedUserIds;
     this.#adminUserIds = config.adminUserIds;
     this.#logger = logger;
+    registerChannelTraits(this.name, {
+      commandText: (command) => `/wirebot ${command}`,
+      supportsFileDelivery: false,
+    });
     this.#client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -186,15 +193,9 @@ export class DiscordChannel implements MessagingChannel {
 
   public async stop(): Promise<void> {
     this.#handler = undefined;
-    const pending = [...this.#pendingChoices.values()];
-    this.#pendingChoices.clear();
-    for (const choice of pending) {
-      clearTimeout(choice.timer);
-      choice.result.resolve("decline");
-    }
     await Promise.allSettled(
-      pending.map(async (choice) => {
-        await this.finishChoice(choice, "Request cancelled");
+      [...this.#pendingChoices.keys()].map(async (token) => {
+        await this.declineChoice(token, "Request cancelled");
       }),
     );
     await this.#client.destroy();
@@ -209,12 +210,8 @@ export class DiscordChannel implements MessagingChannel {
         subcommand.setName(entry.command).setDescription(entry.menuDescription),
       );
     }
-    const commandData = command.toJSON();
-    const existing = (await client.application.commands.fetch()).find(
-      (applicationCommand) => applicationCommand.name === commandData.name,
-    );
-    if (existing === undefined) await client.application.commands.create(commandData);
-    else await client.application.commands.edit(existing.id, commandData);
+    // Discord upserts global commands by name, so a plain create also updates.
+    await client.application.commands.create(command.toJSON());
   }
 
   private async handleMessage(message: Message): Promise<void> {
@@ -241,7 +238,7 @@ export class DiscordChannel implements MessagingChannel {
     }
 
     const command = parseDiscordCommand(rawText);
-    const replyRoute = await this.replyChannel(message, command?.name);
+    const replyRoute = await this.replyChannel(message, command?.name, rawText);
     if (replyRoute === undefined) return;
     const responder = this.responder(
       replyRoute.channelId,
@@ -249,7 +246,7 @@ export class DiscordChannel implements MessagingChannel {
       replyRoute.replyToMessageId,
       displayName,
     );
-    const baseText = normalizeDiscordMessage(message, botUserId);
+    const baseText = withDiscordMediaNotices(message, rawText);
     if (baseText.length === 0) return;
     const text = await this.withThreadContext(message, botUserId, command, baseText);
     const inbound: InboundMessage = {
@@ -282,12 +279,13 @@ export class DiscordChannel implements MessagingChannel {
   private async replyChannel(
     message: Message,
     commandName: string | undefined,
+    rawText: string,
   ): Promise<DiscordReplyRoute | undefined> {
     if (!message.inGuild()) {
       return { channelId: message.channelId, replyToMessageId: message.id };
     }
     if (message.channel.isThread()) {
-      if (!this.canSendInThread(message.channel)) {
+      if (!message.channel.sendable) {
         await this.notifyThreadRequired(message);
         return undefined;
       }
@@ -321,10 +319,10 @@ export class DiscordChannel implements MessagingChannel {
       const thread =
         existing ??
         (await message.startThread({
-          name: discordThreadName(discordTextContent(message, this.#botUserId ?? "")),
+          name: discordThreadName(rawText),
           reason: "Keep this Wirebot task isolated from the surrounding channel",
         }));
-      if (!this.canSendInThread(thread)) {
+      if (!thread.sendable) {
         await this.notifyThreadRequired(message);
         return undefined;
       }
@@ -340,42 +338,32 @@ export class DiscordChannel implements MessagingChannel {
     }
   }
 
-  private canSendInThread(thread: AnyThreadChannel): boolean {
-    return thread.sendable;
-  }
-
   private async notifyThreadRequired(message: Message): Promise<void> {
     const content =
       "I need a usable Discord thread to keep Codex tasks isolated. Grant Create Public Threads and Send Messages in Threads, or mention me inside an unlocked thread where I can reply.";
     const privateThread =
       message.channel.isThread() && message.channel.type === ChannelType.PrivateThread;
-    const target =
-      message.channel.isThread() && !privateThread ? message.channel.parent : undefined;
-    const send = privateThread
-      ? message.author.send({
+    const parent = message.channel.isThread() && !privateThread ? message.channel.parent : null;
+    try {
+      if (privateThread) {
+        await message.author.send({
           content: `I can't answer in that private thread. ${content}`,
-          allowedMentions: { parse: [], repliedUser: false },
           flags: MessageFlags.SuppressEmbeds,
-        })
-      : target?.isTextBased() === true && !target.isVoiceBased() && target.isSendable()
-        ? target.send({
-            content: `I can't answer in <#${message.channelId}>. ${content}`,
-            allowedMentions: { parse: [], repliedUser: false },
-            flags: MessageFlags.SuppressEmbeds,
-          })
-        : message.reply({
-            content,
-            allowedMentions: { parse: [], repliedUser: false },
-            flags: MessageFlags.SuppressEmbeds,
-          });
-    await send
-      .then(() => undefined)
-      .catch((error: unknown) => {
-        this.#logger.warn("Could not deliver Discord thread permission guidance", {
-          channelId: message.channelId,
-          error: errorMessage(error),
         });
+      } else if (parent?.isTextBased() === true && !parent.isVoiceBased() && parent.isSendable()) {
+        await parent.send({
+          content: `I can't answer in <#${message.channelId}>. ${content}`,
+          flags: MessageFlags.SuppressEmbeds,
+        });
+      } else {
+        await message.reply({ content, flags: MessageFlags.SuppressEmbeds });
+      }
+    } catch (error) {
+      this.#logger.warn("Could not deliver Discord thread permission guidance", {
+        channelId: message.channelId,
+        error: errorMessage(error),
       });
+    }
   }
 
   private async withThreadContext(
@@ -428,9 +416,7 @@ export class DiscordChannel implements MessagingChannel {
       chars: inbound.text.length,
     });
     if (command !== undefined && instanceAdminCommands.has(command.name) && !this.isAdmin(userId)) {
-      await inbound.responder.sendText(
-        "This command changes Wirebot for everyone using it and is limited to its admins.",
-      );
+      await inbound.responder.sendText(adminOnlyText);
       return;
     }
     if (command?.name === "config" && this.#configUi !== undefined) {
@@ -492,10 +478,7 @@ export class DiscordChannel implements MessagingChannel {
     }
     const name = interaction.options.getSubcommand();
     if (instanceAdminCommands.has(name) && !this.isAdmin(userId)) {
-      await interaction.reply({
-        content: "This command changes Wirebot for everyone using it and is limited to its admins.",
-        flags: MessageFlags.Ephemeral,
-      });
+      await interaction.reply({ content: adminOnlyText, flags: MessageFlags.Ephemeral });
       return;
     }
     const isPrivate = interaction.channel?.isDMBased() === true;
@@ -524,13 +507,9 @@ export class DiscordChannel implements MessagingChannel {
 
     await interaction.deferReply();
     const command = { name, args: "" };
-    const initialReply = async (
-      content: string,
-      components?: Parameters<DiscordMessagingApi["postMessage"]>[0]["components"],
-    ): Promise<string> => {
+    const initialReply: DiscordInitialReply = async (content, components) => {
       const sent = await interaction.editReply({
         content,
-        allowedMentions: { parse: [], repliedUser: false },
         flags: MessageFlags.SuppressEmbeds,
         ...(components === undefined ? {} : { components }),
       });
@@ -617,8 +596,7 @@ export class DiscordChannel implements MessagingChannel {
     }
     const selected = pending.options[index];
     if (selected === undefined) return;
-    clearTimeout(pending.timer);
-    this.#pendingChoices.delete(pending.token);
+    this.takeChoice(pending.token);
     pending.result.resolve(selected.id);
     await this.#api
       .updateMessage({
@@ -649,11 +627,7 @@ export class DiscordChannel implements MessagingChannel {
     }
     if (instanceAdminCommands.has(command.name) && !this.isAdmin(userId)) {
       await interaction
-        .followUp({
-          content:
-            "This command changes Wirebot for everyone using it and is limited to its admins.",
-          flags: MessageFlags.Ephemeral,
-        })
+        .followUp({ content: adminOnlyText, flags: MessageFlags.Ephemeral })
         .catch(() => undefined);
       return;
     }
@@ -724,11 +698,7 @@ export class DiscordChannel implements MessagingChannel {
     });
     const result = deferred<string>();
     const timer = setTimeout(() => {
-      const pending = this.#pendingChoices.get(token);
-      if (pending === undefined) return;
-      this.#pendingChoices.delete(token);
-      pending.result.resolve("decline");
-      void this.finishChoice(pending, "Request expired");
+      void this.declineChoice(token, "Request expired");
     }, choiceTimeoutMs);
     timer.unref();
     const pending: PendingChoice = {
@@ -743,12 +713,7 @@ export class DiscordChannel implements MessagingChannel {
     };
     this.#pendingChoices.set(token, pending);
     const onAbort = (): void => {
-      const active = this.#pendingChoices.get(token);
-      if (active === undefined) return;
-      clearTimeout(active.timer);
-      this.#pendingChoices.delete(token);
-      active.result.resolve("decline");
-      void this.finishChoice(active, "Request cancelled");
+      void this.declineChoice(token, "Request cancelled");
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     if (isAborted()) onAbort();
@@ -759,13 +724,25 @@ export class DiscordChannel implements MessagingChannel {
     }
   };
 
-  private async finishChoice(choice: PendingChoice, status: string): Promise<void> {
+  /** Remove a pending choice from the map and cancel its expiry timer. */
+  private takeChoice(token: string): PendingChoice | undefined {
+    const pending = this.#pendingChoices.get(token);
+    if (pending === undefined) return undefined;
+    this.#pendingChoices.delete(token);
+    clearTimeout(pending.timer);
+    return pending;
+  }
+
+  private async declineChoice(token: string, status: string): Promise<void> {
+    const pending = this.takeChoice(token);
+    if (pending === undefined) return;
+    pending.result.resolve("decline");
     await this.#api
       .updateMessage({
-        channelId: choice.channelId,
-        messageId: choice.messageId,
-        content: `${choice.baseText}\n\n→ ${status}`.slice(0, 2_000),
-        components: disabledChoiceRows(choice.token, choice.options),
+        channelId: pending.channelId,
+        messageId: pending.messageId,
+        content: `${pending.baseText}\n\n→ ${status}`.slice(0, 2_000),
+        components: choiceRows(pending.token, pending.options, true),
       })
       .catch(() => undefined);
   }
@@ -797,22 +774,14 @@ export class DiscordChannel implements MessagingChannel {
   private wasRecentlyProcessed(key: string): boolean {
     if (this.#recentEvents.has(key)) return true;
     this.#recentEvents.add(key);
-    while (this.#recentEvents.size > recentEventLimit) {
-      const oldest = this.#recentEvents.values().next().value;
-      if (oldest === undefined) break;
-      this.#recentEvents.delete(oldest);
-    }
+    trimInsertionOrdered(this.#recentEvents, recentEventLimit);
     return false;
   }
 
   private rememberEngagedThread(threadId: string): void {
     this.#engagedThreads.delete(threadId);
     this.#engagedThreads.add(threadId);
-    while (this.#engagedThreads.size > engagedThreadLimit) {
-      const oldest = this.#engagedThreads.values().next().value;
-      if (oldest === undefined) break;
-      this.#engagedThreads.delete(oldest);
-    }
+    trimInsertionOrdered(this.#engagedThreads, engagedThreadLimit);
   }
 }
 
@@ -829,12 +798,12 @@ function discordMessagingApi(client: Client): DiscordMessagingApi {
     }
     return resolved;
   };
+  // Mention suppression comes from the Client's allowedMentions default.
   return {
     postMessage: async (options) => {
       const target = await channel(options.channelId);
       const sent = await target.send({
         content: options.content,
-        allowedMentions: { parse: [], repliedUser: false },
         flags: MessageFlags.SuppressEmbeds,
         ...(options.components === undefined ? {} : { components: options.components }),
         ...(options.replyToMessageId === undefined
@@ -850,10 +819,8 @@ function discordMessagingApi(client: Client): DiscordMessagingApi {
     },
     updateMessage: async (options) => {
       const target = await channel(options.channelId);
-      const message = await target.messages.fetch(options.messageId);
-      await message.edit({
+      await target.messages.edit(options.messageId, {
         content: options.content,
-        allowedMentions: { parse: [], repliedUser: false },
         flags: MessageFlags.SuppressEmbeds,
         ...(options.components === undefined ? {} : { components: options.components }),
       });
