@@ -5,11 +5,11 @@ import type {
   OutboundAttachment,
   OutboundMessage,
   OutboundStream,
-  ProgressSnapshot,
   SendOptions,
 } from "../../core/channel.js";
 import type { Logger } from "../../shared/logger.js";
-import { formatThinkingBlock, splitMessageText } from "../progress.js";
+import { DraftReplyStream } from "../draft-stream.js";
+import { splitMessageText } from "../progress.js";
 import { escapeSlackEntities, markdownToMrkdwn } from "./format.js";
 import type { SlackThreadMessage } from "./message.js";
 import type { SlackDeliveryTarget } from "./references.js";
@@ -178,11 +178,6 @@ function threadOption(threadTs: string | undefined): ThreadOption {
   return threadTs === undefined ? {} : { threadTs };
 }
 
-export function truncateForLog(text: string, limit = 1_500): string {
-  const compact = text.trim();
-  return compact.length <= limit ? compact : `${compact.slice(0, limit - 1)}…`;
-}
-
 export async function publishSlackMessage(
   api: SlackMessagingApi,
   target: SlackDeliveryTarget,
@@ -313,26 +308,10 @@ export class SlackResponder implements MessageResponder {
   }
 }
 
-export class SlackReplyStream implements OutboundStream {
-  static readonly #draftIntervalMs = 1_500;
-  #progress: ProgressSnapshot = { actions: [], plan: [] };
-  #finalText = "";
-  #messageTs: string | undefined;
-  #starting: Promise<void> | undefined;
-  #lastDraftAt = 0;
-  #lastPublishedText = "";
-  #draftDirty = false;
-  #draftTimer: NodeJS.Timeout | undefined;
-  #draftInFlight: Promise<void> | undefined;
-  #closing = false;
-  #completing: Promise<void> | undefined;
-  #completed = false;
-  #loggedActions = 0;
-  #lastReasoning = "";
+export class SlackReplyStream extends DraftReplyStream {
   readonly #api: SlackMessagingApi;
   readonly #channel: string;
   readonly #threadTs: string | undefined;
-  readonly #logger: Logger;
 
   public constructor(
     api: SlackMessagingApi,
@@ -340,214 +319,44 @@ export class SlackReplyStream implements OutboundStream {
     threadTs: string | undefined,
     logger: Logger,
   ) {
+    super(logger, "Slack", slackTextLimit);
     this.#api = api;
     this.#channel = channel;
     this.#threadTs = threadTs;
-    this.#logger = logger;
   }
 
-  public async start(initialProgress?: ProgressSnapshot): Promise<void> {
-    if (this.#closing || this.#completed || this.#messageTs !== undefined) return;
-    if (this.#starting !== undefined) return await this.#starting;
-    if (initialProgress !== undefined) this.#progress = initialProgress;
-    const preview = this.preview();
-    const post = this.#api
-      .postMessage({
-        channel: this.#channel,
-        text: preview,
-        ...threadOption(this.#threadTs),
-      })
-      .then((ts) => {
-        this.#messageTs = ts;
-        this.#lastDraftAt = Date.now();
-        this.#lastPublishedText = preview;
-        if (this.#draftDirty) this.scheduleDraft(true);
-      })
-      .catch((error: unknown) => {
-        this.#logger.debug("Slack progress message could not be posted", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    this.#starting = post;
-    try {
-      await post;
-    } finally {
-      this.#starting = undefined;
-    }
-  }
-
-  public setProgress(progress: ProgressSnapshot): void {
-    if (this.#closing || this.#completed) return;
-    // Mirror the run into stdout: every tool call once, and reasoning
-    // summaries as they change.
-    for (const action of progress.actions.slice(this.#loggedActions)) {
-      this.#logger.debug("Codex tool call", { action: action.label });
-    }
-    this.#loggedActions = Math.max(this.#loggedActions, progress.actions.length);
-    const reasoning = (progress.summary ?? progress.message)?.trim();
-    if (reasoning !== undefined && reasoning.length > 0 && reasoning !== this.#lastReasoning) {
-      this.#lastReasoning = reasoning;
-      this.#logger.debug("Codex reasoning", { text: truncateForLog(reasoning, 600) });
-    }
-    this.#progress = progress;
-    this.scheduleDraft();
-  }
-
-  public appendFinal(delta: string): void {
-    if (this.#closing || this.#completed) return;
-    this.#finalText += delta;
-    this.scheduleDraft();
-  }
-
-  public async complete(
-    text: string,
-    attachments: readonly OutboundAttachment[] = [],
-  ): Promise<void> {
-    if (this.#completed) return;
-    if (this.#completing !== undefined) return await this.#completing;
-
-    this.#closing = true;
-    const completion = this.finish(text, attachments);
-    this.#completing = completion;
-    try {
-      await completion;
-      this.#completed = true;
-    } finally {
-      if (this.#completing === completion) this.#completing = undefined;
-      if (!this.#completed) this.#closing = false;
-    }
-  }
-
-  public async fail(message: string): Promise<void> {
-    await this.complete(`Codex error: ${message}`);
-  }
-
-  private async finish(text: string, attachments: readonly OutboundAttachment[]): Promise<void> {
-    this.clearTimer();
-    await this.#starting?.catch(() => undefined);
-    await this.#draftInFlight?.catch(() => undefined);
-    if (text.length > 0) {
-      this.#logger.info("Codex answer delivered", {
-        chars: text.length,
-      });
-    }
-    const chunks =
-      text.length === 0 ? [] : splitMessageText(markdownToMrkdwn(text), slackTextLimit);
-    // Freeze the progress message without the streaming cursor. The answer
-    // itself arrives as separate messages below: a silent edit of the
-    // thinking message never notifies anyone, and a failed edit must not
-    // take the answer down with it.
-    if (this.#messageTs !== undefined) {
-      await this.#api
-        .updateMessage({
-          channel: this.#channel,
-          ts: this.#messageTs,
-          text: escapeSlackEntities(formatThinkingBlock(this.#progress)).slice(0, slackTextLimit),
-        })
-        .catch((error: unknown) => {
-          this.#logger.debug("Slack progress freeze failed", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-    }
-    let undelivered = 0;
-    for (const chunk of chunks) {
-      try {
-        await this.#api.postMessage({
-          channel: this.#channel,
-          text: chunk,
-          ...threadOption(this.#threadTs),
-        });
-      } catch (error) {
-        undelivered += 1;
-        this.#logger.warn("Slack final text delivery failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    if (undelivered > 0) {
-      await this.#api
-        .postMessage({
-          channel: this.#channel,
-          text: `⚠️ ${undelivered} part${undelivered === 1 ? "" : "s"} of the reply could not be delivered.`,
-          ...threadOption(this.#threadTs),
-        })
-        .catch(() => undefined);
-    }
-    await sendSlackAttachments(this.#api, this.#channel, this.#threadTs, attachments, this.#logger);
-  }
-
-  private scheduleDraft(immediate = false): void {
-    if (this.#closing || this.#completed) return;
-    this.#draftDirty = true;
-    if (this.#messageTs === undefined || this.#draftInFlight !== undefined) return;
-
-    const wait = immediate
-      ? 0
-      : Math.max(0, SlackReplyStream.#draftIntervalMs - (Date.now() - this.#lastDraftAt));
-    if (wait === 0) {
-      this.startDraftUpdate();
-      return;
-    }
-    if (this.#draftTimer !== undefined) return;
-    this.#draftTimer = setTimeout(() => {
-      this.#draftTimer = undefined;
-      this.startDraftUpdate();
-    }, wait);
-    this.#draftTimer.unref();
-  }
-
-  private startDraftUpdate(): void {
-    if (
-      this.#closing ||
-      this.#completed ||
-      this.#messageTs === undefined ||
-      this.#draftInFlight !== undefined ||
-      !this.#draftDirty
-    ) {
-      return;
-    }
-
-    this.#draftDirty = false;
-    const update = this.flushDraft().catch((error: unknown) => {
-      this.#logger.debug("Slack draft update failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-    this.#draftInFlight = update;
-    void update.finally(() => {
-      if (this.#draftInFlight === update) this.#draftInFlight = undefined;
-      if (this.#draftDirty) this.scheduleDraft();
+  protected async postInitial(content: string): Promise<string> {
+    return await this.#api.postMessage({
+      channel: this.#channel,
+      text: content,
+      ...threadOption(this.#threadTs),
     });
   }
 
-  private async flushDraft(): Promise<void> {
-    const messageTs = this.#messageTs;
-    if (this.#closing || this.#completed || messageTs === undefined) return;
-    const preview = this.preview();
-    if (preview === this.#lastPublishedText) return;
-    this.#lastDraftAt = Date.now();
-    await this.#api.updateMessage({ channel: this.#channel, ts: messageTs, text: preview });
-    this.#lastPublishedText = preview;
+  protected async post(content: string): Promise<void> {
+    await this.#api.postMessage({
+      channel: this.#channel,
+      text: content,
+      ...threadOption(this.#threadTs),
+    });
   }
 
-  private preview(): string {
-    // Entity escaping can expand the progress block past the message limit,
-    // so clamp it before budgeting the final-text tail.
-    const progress = escapeSlackEntities(formatThinkingBlock(this.#progress)).slice(
-      0,
-      slackTextLimit - 3,
-    );
-    if (this.#finalText.length === 0) return `${progress}\n\n▌`;
-    const available = Math.max(0, slackTextLimit - progress.length - 3);
-    const finalText = available === 0 ? "" : markdownToMrkdwn(this.#finalText).slice(-available);
-    return `${progress}\n\n${finalText}▌`;
+  protected async update(messageTs: string, content: string): Promise<void> {
+    await this.#api.updateMessage({ channel: this.#channel, ts: messageTs, text: content });
   }
 
-  private clearTimer(): void {
-    if (this.#draftTimer !== undefined) clearTimeout(this.#draftTimer);
-    this.#draftTimer = undefined;
-    this.#draftDirty = false;
+  // Escaping matters even in previews: `<command>` fragments would vanish and
+  // `<!channel>` would ping everyone.
+  protected renderProgress(block: string): string {
+    return escapeSlackEntities(block);
+  }
+
+  protected renderFinal(text: string): string {
+    return markdownToMrkdwn(text);
+  }
+
+  protected override async finishExtras(attachments: readonly OutboundAttachment[]): Promise<void> {
+    await sendSlackAttachments(this.#api, this.#channel, this.#threadTs, attachments, this.logger);
   }
 }
 

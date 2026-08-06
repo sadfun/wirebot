@@ -10,13 +10,12 @@ import type {
   OutboundAttachment,
   OutboundMessage,
   OutboundStream,
-  ProgressSnapshot,
   SendOptions,
 } from "../../core/channel.js";
-import { errorMessage } from "../../shared/errors.js";
 import type { Logger } from "../../shared/logger.js";
 import { decodeBase64UrlJson, encodeBase64UrlJson, truncate } from "../../shared/text.js";
-import { formatThinkingBlock, splitMessageText } from "../progress.js";
+import { DraftReplyStream } from "../draft-stream.js";
+import { splitMessageText } from "../progress.js";
 
 export const discordTextLimit = 2_000;
 const discordChoiceTextLimit = 1_880;
@@ -158,27 +157,11 @@ export class DiscordResponder implements MessageResponder {
   }
 }
 
-export class DiscordReplyStream implements OutboundStream {
-  static readonly #draftIntervalMs = 1_500;
-  #progress: ProgressSnapshot = { actions: [], plan: [] };
-  #finalText = "";
-  #messageId: string | undefined;
-  #starting: Promise<void> | undefined;
-  #lastDraftAt = 0;
-  #lastPublishedText = "";
-  #draftDirty = false;
-  #draftTimer: NodeJS.Timeout | undefined;
-  #draftInFlight: Promise<void> | undefined;
-  #closing = false;
-  #completing: Promise<void> | undefined;
-  #completed = false;
-  #loggedActions = 0;
-  #lastReasoning = "";
+export class DiscordReplyStream extends DraftReplyStream {
   readonly #api: DiscordMessagingApi;
   readonly #channelId: string;
   readonly #replyToMessageId: string | undefined;
   readonly #initialReply: DiscordInitialReply | undefined;
-  readonly #logger: Logger;
 
   public constructor(
     api: DiscordMessagingApi,
@@ -187,194 +170,50 @@ export class DiscordReplyStream implements OutboundStream {
     replyToMessageId?: string,
     initialReply?: DiscordInitialReply,
   ) {
+    super(logger, "Discord", discordTextLimit);
     this.#api = api;
     this.#channelId = channelId;
-    this.#logger = logger;
     this.#replyToMessageId = replyToMessageId;
     this.#initialReply = initialReply;
   }
 
-  public async start(initialProgress?: ProgressSnapshot): Promise<void> {
-    if (this.#closing || this.#completed || this.#messageId !== undefined) return;
-    if (this.#starting !== undefined) return await this.#starting;
-    if (initialProgress !== undefined) this.#progress = initialProgress;
-    const preview = this.preview();
-    const post = (
-      this.#initialReply === undefined
-        ? this.#api.postMessage({
-            channelId: this.#channelId,
-            content: preview,
-            ...(this.#replyToMessageId === undefined
-              ? {}
-              : { replyToMessageId: this.#replyToMessageId }),
-          })
-        : this.#initialReply(preview)
-    )
-      .then((messageId) => {
-        this.#messageId = messageId;
-        this.#lastDraftAt = Date.now();
-        this.#lastPublishedText = preview;
-        if (this.#draftDirty) this.scheduleDraft(true);
-      })
-      .catch((error: unknown) => {
-        this.#logger.debug("Discord progress message could not be posted", {
-          error: errorMessage(error),
-        });
-      });
-    this.#starting = post;
-    await this.#api.sendTyping(this.#channelId).catch(() => undefined);
-    try {
-      await post;
-    } finally {
-      this.#starting = undefined;
-    }
+  protected async postInitial(content: string): Promise<string> {
+    return this.#initialReply === undefined
+      ? await this.#api.postMessage({
+          channelId: this.#channelId,
+          content,
+          ...(this.#replyToMessageId === undefined
+            ? {}
+            : { replyToMessageId: this.#replyToMessageId }),
+        })
+      : await this.#initialReply(content);
   }
 
-  public setProgress(progress: ProgressSnapshot): void {
-    if (this.#closing || this.#completed) return;
-    for (const action of progress.actions.slice(this.#loggedActions)) {
-      this.#logger.debug("Codex tool call", { action: action.label });
-    }
-    this.#loggedActions = Math.max(this.#loggedActions, progress.actions.length);
-    const reasoning = (progress.summary ?? progress.message)?.trim();
-    if (reasoning !== undefined && reasoning.length > 0 && reasoning !== this.#lastReasoning) {
-      this.#lastReasoning = reasoning;
-      this.#logger.debug("Codex reasoning", { text: truncate(reasoning, 600) });
-    }
-    this.#progress = progress;
-    this.scheduleDraft();
+  protected async post(content: string): Promise<void> {
+    await this.#api.postMessage({ channelId: this.#channelId, content });
   }
 
-  public appendFinal(delta: string): void {
-    if (this.#closing || this.#completed) return;
-    this.#finalText += delta;
-    this.scheduleDraft();
+  protected async update(messageId: string, content: string): Promise<void> {
+    await this.#api.updateMessage({ channelId: this.#channelId, messageId, content });
   }
 
-  public async complete(
+  protected renderProgress(block: string): string {
+    return block;
+  }
+
+  protected renderFinal(text: string): string {
+    return text;
+  }
+
+  protected override prepareFinalText(
     text: string,
-    attachments: readonly OutboundAttachment[] = [],
-  ): Promise<void> {
-    if (this.#completed) return;
-    if (this.#completing !== undefined) return await this.#completing;
-    this.#closing = true;
-    const completion = this.finish(withAttachmentNotices(text, attachments));
-    this.#completing = completion;
-    try {
-      await completion;
-      this.#completed = true;
-    } finally {
-      if (this.#completing === completion) this.#completing = undefined;
-      if (!this.#completed) this.#closing = false;
-    }
+    attachments: readonly OutboundAttachment[],
+  ): string {
+    return withAttachmentNotices(text, attachments);
   }
 
-  public async fail(message: string): Promise<void> {
-    await this.complete(`Codex error: ${message}`);
-  }
-
-  private async finish(text: string): Promise<void> {
-    this.clearTimer();
-    await this.#starting?.catch(() => undefined);
-    await this.#draftInFlight?.catch(() => undefined);
-    if (text.length > 0) this.#logger.info("Codex answer delivered", { chars: text.length });
-    if (this.#messageId !== undefined) {
-      await this.#api
-        .updateMessage({
-          channelId: this.#channelId,
-          messageId: this.#messageId,
-          content: formatThinkingBlock(this.#progress).slice(0, discordTextLimit),
-        })
-        .catch((error: unknown) => {
-          this.#logger.debug("Discord progress freeze failed", {
-            error: errorMessage(error),
-          });
-        });
-    }
-    let undelivered = 0;
-    for (const chunk of nonEmptyChunks(text)) {
-      try {
-        await this.#api.postMessage({ channelId: this.#channelId, content: chunk });
-      } catch (error) {
-        undelivered += 1;
-        this.#logger.warn("Discord final text delivery failed", {
-          error: errorMessage(error),
-        });
-      }
-    }
-    if (undelivered > 0) {
-      await this.#api
-        .postMessage({
-          channelId: this.#channelId,
-          content: `⚠️ ${undelivered} part${undelivered === 1 ? "" : "s"} of the reply could not be delivered.`,
-        })
-        .catch(() => undefined);
-    }
-  }
-
-  private scheduleDraft(immediate = false): void {
-    if (this.#closing || this.#completed) return;
-    this.#draftDirty = true;
-    if (this.#messageId === undefined || this.#draftInFlight !== undefined) return;
-    const wait = immediate
-      ? 0
-      : Math.max(0, DiscordReplyStream.#draftIntervalMs - (Date.now() - this.#lastDraftAt));
-    if (wait === 0) {
-      this.startDraftUpdate();
-      return;
-    }
-    if (this.#draftTimer !== undefined) return;
-    this.#draftTimer = setTimeout(() => {
-      this.#draftTimer = undefined;
-      this.startDraftUpdate();
-    }, wait);
-    this.#draftTimer.unref();
-  }
-
-  private startDraftUpdate(): void {
-    if (
-      this.#closing ||
-      this.#completed ||
-      this.#messageId === undefined ||
-      this.#draftInFlight !== undefined ||
-      !this.#draftDirty
-    ) {
-      return;
-    }
-    this.#draftDirty = false;
-    const update = this.flushDraft().catch((error: unknown) => {
-      this.#logger.debug("Discord draft update failed", {
-        error: errorMessage(error),
-      });
-    });
-    this.#draftInFlight = update;
-    void update.finally(() => {
-      if (this.#draftInFlight === update) this.#draftInFlight = undefined;
-      if (this.#draftDirty) this.scheduleDraft();
-    });
-  }
-
-  private async flushDraft(): Promise<void> {
-    const messageId = this.#messageId;
-    if (this.#closing || this.#completed || messageId === undefined) return;
-    const preview = this.preview();
-    if (preview === this.#lastPublishedText) return;
-    this.#lastDraftAt = Date.now();
-    await this.#api.updateMessage({ channelId: this.#channelId, messageId, content: preview });
-    this.#lastPublishedText = preview;
-  }
-
-  private preview(): string {
-    const progress = formatThinkingBlock(this.#progress).slice(0, discordTextLimit - 3);
-    if (this.#finalText.length === 0) return `${progress}\n\n▌`;
-    const available = Math.max(0, discordTextLimit - progress.length - 3);
-    return `${progress}\n\n${this.#finalText.slice(-available)}▌`;
-  }
-
-  private clearTimer(): void {
-    if (this.#draftTimer !== undefined) clearTimeout(this.#draftTimer);
-    this.#draftTimer = undefined;
-    this.#draftDirty = false;
+  protected override async afterStartInitiated(): Promise<void> {
+    await this.#api.sendTyping(this.#channelId).catch(() => undefined);
   }
 }
 
