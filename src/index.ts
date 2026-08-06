@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { ScheduledRunsEngine } from "./automations/engine.js";
 import { AutomationStore } from "./automations/store.js";
+import { SlackChannel } from "./channels/slack/channel.js";
 import { TelegramChannel } from "./channels/telegram/channel.js";
 import { CodexConfigService } from "./codex/config-service.js";
 import { CodexAppServer } from "./codex/rpc.js";
@@ -28,7 +29,7 @@ import { CurlImpersonateTransport } from "./transcription/transport.js";
  * workspace-write stays.
  */
 function defaultCodexConfig(container: boolean): string {
-  return `# Managed by Wirebot. You can edit this file or use the Telegram Mini App.
+  return `# Managed by Wirebot. You can edit this file or use a Wirebot settings UI.
 approval_policy = "on-request"
 sandbox_mode = "${container ? "danger-full-access" : "workspace-write"}"
 web_search = "live"
@@ -154,22 +155,27 @@ export async function runWirebot(): Promise<void> {
     resources.push(runtime);
     await runtime.start();
 
-    const miniApp = new MiniAppServer({
-      host: config.host,
-      port: config.port,
-      botToken: config.telegramToken,
-      allowedUserIds: config.allowedUserIds,
-      configService,
-      runtime,
-      settings,
-      logger: logger.child({ component: "miniapp" }),
-      ...(config.assetsDirectory === undefined ? {} : { assetDirectory: config.assetsDirectory }),
-    });
-    resources.push(miniApp);
-    await miniApp.start();
+    // The Mini App authenticates through Telegram initData, so it only runs
+    // when the Telegram connector is configured.
+    let miniApp: MiniAppServer | undefined;
+    if (config.telegram !== undefined) {
+      miniApp = new MiniAppServer({
+        host: config.host,
+        port: config.port,
+        botToken: config.telegram.botToken,
+        allowedUserIds: config.telegram.allowedUserIds,
+        configService,
+        runtime,
+        settings,
+        logger: logger.child({ component: "miniapp" }),
+        ...(config.assetsDirectory === undefined ? {} : { assetDirectory: config.assetsDirectory }),
+      });
+      resources.push(miniApp);
+      await miniApp.start();
+    }
 
     let publicUrl = config.publicUrl;
-    if (publicUrl === undefined && config.tunnelMode === "auto") {
+    if (publicUrl === undefined && config.telegram !== undefined && config.tunnelMode === "auto") {
       try {
         const tunnel = new QuickTunnel({
           host: config.host,
@@ -189,23 +195,38 @@ export async function runWirebot(): Promise<void> {
       }
     }
 
-    const telegram = new TelegramChannel(
-      config.telegramToken,
-      config.telegramApiBase,
-      config.allowedUserIds,
-      config.telegramPollTimeout,
-      join(config.workspace, ".wirebot", "attachments"),
-      logger.child({ component: "telegram" }),
-      publicUrl === undefined ? undefined : `${publicUrl}/miniapp`,
+    const telegram =
+      config.telegram === undefined
+        ? undefined
+        : new TelegramChannel(
+            config.telegram.botToken,
+            config.telegramApiBase,
+            config.telegram.allowedUserIds,
+            config.telegramPollTimeout,
+            join(config.workspace, ".wirebot", "attachments"),
+            logger.child({ component: "telegram" }),
+            publicUrl === undefined ? undefined : `${publicUrl}/miniapp`,
+          );
+    const slack =
+      config.slack === undefined
+        ? undefined
+        : new SlackChannel(
+            config.slack,
+            join(config.workspace, ".wirebot", "attachments"),
+            logger.child({ component: "slack" }),
+            configService,
+          );
+    const channels = [telegram, slack].filter(
+      (channel): channel is NonNullable<typeof channel> => channel !== undefined,
     );
     const scheduledRuns = new ScheduledRunsEngine({
       store: automations,
       codex,
-      channels: [telegram],
+      channels,
       workspace: config.workspace,
       logger: logger.child({ component: "scheduled-runs" }),
     });
-    miniApp.setScheduledRuns(scheduledRuns);
+    miniApp?.setScheduledRuns(scheduledRuns);
     const bridge = new CodexBridge(
       codex,
       publicUrl,
@@ -213,8 +234,14 @@ export async function runWirebot(): Promise<void> {
       runtime,
       scheduledRuns,
     );
-    resources.push(telegram);
-    await telegram.start(bridge.handleMessage);
+    if (telegram !== undefined) {
+      resources.push(telegram);
+      await telegram.start(bridge.handleMessage);
+    }
+    if (slack !== undefined) {
+      resources.push(slack);
+      await slack.start(bridge.handleMessage);
+    }
     resources.push(scheduledRuns);
     await scheduledRuns.start();
 
@@ -222,7 +249,9 @@ export async function runWirebot(): Promise<void> {
       version: wirebotVersion,
       codexVersion: pinnedCodexVersion,
       workspace: config.workspace,
-      miniApp: `${config.host}:${config.port}`,
+      miniApp: config.telegram === undefined ? "disabled" : `${config.host}:${config.port}`,
+      telegram: telegram === undefined ? "disabled" : "enabled",
+      slack: slack === undefined ? "disabled" : "enabled",
     });
 
     await shutdown.promise;

@@ -2,8 +2,8 @@ services:
   wirebot:
     image: ghcr.io/sadfun/wirebot:latest
     restart: unless-stopped
-    # TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USER_IDS are required; see
-    # .env.example for everything else (PUBLIC_URL, WIREBOT_TUNNEL, ...).
+    # Configure Telegram, Slack, or both; see .env.example for connector and
+    # runtime variables (PUBLIC_URL, WIREBOT_TUNNEL, and others).
     env_file: .env
     volumes:
       # One volume holds all user state: the Codex workspace and login, the
