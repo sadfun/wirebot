@@ -1,0 +1,26 @@
+diff --git a/dist/src/SlackWebSocket.js b/dist/src/SlackWebSocket.js
+index f07da207374703405fa6bb1cc9e9809589b93f44..a6a7889571d4f284ffcf92f821f4bbefa00abd6c 100644
+--- a/dist/src/SlackWebSocket.js
++++ b/dist/src/SlackWebSocket.js
+@@ -35,7 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
+ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.SlackWebSocket = exports.WS_READY_STATES = void 0;
+ const node_diagnostics_channel_1 = require("node:diagnostics_channel");
+-const undici_1 = require("undici");
++const undici_1 = require("undici-real");
+ const errors_1 = require("./errors");
+ const logger_1 = __importStar(require("./logger"));
+ exports.WS_READY_STATES = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
+diff --git a/dist/src/SocketModeClient.js b/dist/src/SocketModeClient.js
+index 50804bc1a5600a07d93691ce79ff4757eb1b7838..3841267265f96d95c814d97822f8b76ddeb8e3da 100644
+--- a/dist/src/SocketModeClient.js
++++ b/dist/src/SocketModeClient.js
+@@ -39,7 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.SocketModeClient = void 0;
+ const web_api_1 = require("@slack/web-api");
+ const eventemitter3_1 = require("eventemitter3");
+-const undici_1 = require("undici");
++const undici_1 = require("undici-real");
+ const package_json_1 = __importDefault(require("../package.json"));
+ const errors_1 = require("./errors");
+ const logger_1 = __importStar(require("./logger"));
