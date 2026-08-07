@@ -2,6 +2,15 @@
 
 All notable changes to Wirebot are documented in this file.
 
+## [0.2.1] - 2026-08-07
+
+### Fixed
+
+- Slack Socket Mode no longer reconnects every ~15 seconds in compiled builds. Bun substitutes
+  its own undici shim for the undici package, which lacks the ping support that
+  `@slack/socket-mode`'s connection health monitor relies on; socket-mode is now routed to the
+  real undici implementation through an npm alias.
+
 ## [0.2.0] - 2026-08-07
 
 ### Added
