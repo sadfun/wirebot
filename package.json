@@ -43,6 +43,7 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.3.0",
+    "undici-real": "npm:undici@^7.29.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {
@@ -54,5 +55,8 @@
     "@types/react-dom": "^18.3.7",
     "tailwindcss": "^4.1.11",
     "typescript": "7.0.2"
+  },
+  "patchedDependencies": {
+    "@slack/socket-mode@3.0.0": "patches/@slack%2Fsocket-mode@3.0.0.patch"
   }
 }
