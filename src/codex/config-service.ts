@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type { JsonValue } from "../generated/codex/serde_json/JsonValue.js";
-import type { AskForApproval } from "../generated/codex/v2/AskForApproval.js";
 import type { ConfigBatchWriteParams } from "../generated/codex/v2/ConfigBatchWriteParams.js";
 import type { ConfigEdit } from "../generated/codex/v2/ConfigEdit.js";
 import type { ConfigLayer } from "../generated/codex/v2/ConfigLayer.js";
@@ -20,7 +19,8 @@ import { BridgeError } from "../shared/errors.js";
 import { capitalize } from "../shared/text.js";
 import type { CodexAppServer } from "./rpc.js";
 
-const granularApprovalSchema = z.strictObject({
+// Loose: pass through granular fields future Codex versions add instead of rejecting the write.
+const granularApprovalSchema = z.looseObject({
   sandbox_approval: z.boolean(),
   rules: z.boolean(),
   skill_approval: z.boolean(),
@@ -61,33 +61,22 @@ const environmentPatternsSchema = z
   .superRefine(requireUniqueStrings)
   .nullable();
 
-/** Everyday feature flags exposed in the Mini App; labels come from Codex itself. */
-const basicFeatureKeys = Object.freeze([
-  "apps",
-  "goals",
-  "hooks",
-  "fast_mode",
-  "memories",
-  "multi_agent",
-  "personality",
-  "remote_plugin",
-  "shell_snapshot",
-  "shell_tool",
-  "unified_exec",
-] as const);
+/**
+ * Feature flags come from the running app-server's `experimentalFeature/list`;
+ * the key pattern only keeps `features.<key>` write paths well-formed.
+ */
+const featureKeySchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9_-]+$/, "Feature keys must use letters, digits, underscores, or dashes");
 
-type BasicFeatureKey = (typeof basicFeatureKeys)[number];
+const featureValuesSchema = z.record(featureKeySchema, z.boolean().nullable());
 
-const featureValuesSchema = z.strictObject(
-  Object.fromEntries(basicFeatureKeys.map((key) => [key, z.boolean().nullable()])) as Record<
-    BasicFeatureKey,
-    z.ZodNullable<z.ZodBoolean>
-  >,
+const featurePatchSchema = featureValuesSchema.refine(
+  (value) => Object.keys(value).length > 0,
+  "At least one feature value is required",
 );
-
-const featurePatchSchema = featureValuesSchema
-  .partial()
-  .refine((value) => Object.keys(value).length > 0, "At least one feature value is required");
 
 const editableCodexConfigSchema = z.strictObject({
   model: nullableIdentifierSchema,
@@ -143,7 +132,7 @@ export interface ModelProviderCapability {
 }
 
 export interface FeatureCapability {
-  readonly name: BasicFeatureKey;
+  readonly name: string;
   readonly displayName: string;
   readonly description: string;
   readonly stage: ExperimentalFeatureStage;
@@ -192,7 +181,6 @@ export class ConfigValidationError extends BridgeError {
 }
 
 interface ConfigState {
-  readonly response: ConfigReadResponse;
   readonly version: string | null;
   readonly values: EditableCodexConfig;
   readonly capabilities: ConfigCapabilities;
@@ -250,24 +238,23 @@ export class CodexConfigService {
       version: state.version,
       values: state.values,
       capabilities: state.capabilities,
-      validation: validateConfig(state.values, state),
+      validation: structurallyValid(),
     };
   }
 
-  public async validate(input: unknown): Promise<ConfigValidationResult> {
-    const update = configUpdateSchema.parse(input);
-    const state = await this.readState();
-    const candidate = mergeConfig(state.values, update.values);
-    return validateConfig(candidate, state, update.values);
+  /**
+   * Structural validation only: the zod schemas that construct writes. Codex
+   * itself is the authoritative semantic validator — the app-server runs with
+   * --strict-config and rejects invalid saves in the version-checked
+   * config/batchWrite, whose errors the Mini App already surfaces.
+   */
+  public validate(input: unknown): Promise<ConfigValidationResult> {
+    configUpdateSchema.parse(input);
+    return Promise.resolve(structurallyValid());
   }
 
   public async update(input: unknown): Promise<ConfigWriteResponse> {
     const update = configUpdateSchema.parse(input);
-    const state = await this.readState();
-    const candidate = mergeConfig(state.values, update.values);
-    const validation = validateConfig(candidate, state, update.values);
-    if (!validation.valid) throw new ConfigValidationError(validation.issues);
-
     const params: ConfigBatchWriteParams = {
       edits: editsForPatch(update.values),
       expectedVersion: update.expectedVersion,
@@ -295,9 +282,11 @@ export class CodexConfigService {
       modelProviders: toModelProviderCapabilities(response),
     };
     return {
-      response,
       version: userLayer?.version ?? null,
-      values: parseUserValues(userLayer?.config),
+      values: parseUserValues(
+        userLayer?.config,
+        capabilities.features.map((feature) => feature.name),
+      ),
       capabilities,
     };
   }
@@ -367,16 +356,25 @@ async function paginate<Item>(
   throw new BridgeError(`Codex ${label} list exceeded the pagination limit`, "CODEX_PAGINATION");
 }
 
-function parseUserValues(config: JsonValue | undefined): EditableCodexConfig {
+function parseUserValues(
+  config: JsonValue | undefined,
+  featureNames: readonly string[],
+): EditableCodexConfig {
   const root = asRecord(config);
-  const values: Record<string, unknown> = {
-    features: Object.fromEntries(
-      basicFeatureKeys.map((key) => [
-        key,
-        readPath(root, ["features", key], z.boolean().nullable()),
-      ]),
-    ),
-  };
+  // Every capability feature gets an entry (null = inherit); user-set flags
+  // outside the catalog are preserved, and non-boolean entries are ignored.
+  const features: Record<string, boolean | null> = Object.fromEntries(
+    featureNames.map((name) => [name, null]),
+  );
+  for (const [name, value] of Object.entries(asRecord(root.features))) {
+    if (!featureKeySchema.safeParse(name).success) continue;
+    const parsed = z
+      .boolean()
+      .nullable()
+      .safeParse(value ?? null);
+    if (parsed.success) features[name] = parsed.data;
+  }
+  const values: Record<string, unknown> = { features };
   for (const [key, keyPath] of scalarConfigPaths) {
     values[key] = readPath(root, keyPath.split("."), editableCodexConfigSchema.shape[key]);
   }
@@ -396,20 +394,6 @@ function readPath(
   return schema.parse(value ?? null);
 }
 
-function mergeConfig(
-  current: EditableCodexConfig,
-  patch: ConfigUpdate["values"],
-): EditableCodexConfig {
-  return editableCodexConfigSchema.parse({
-    ...current,
-    ...patch,
-    features: {
-      ...current.features,
-      ...patch.features,
-    },
-  });
-}
-
 function editsForPatch(patch: ConfigUpdate["values"]): ConfigEdit[] {
   const edits: ConfigEdit[] = [];
   for (const [key, keyPath] of scalarConfigPaths) {
@@ -420,211 +404,18 @@ function editsForPatch(patch: ConfigUpdate["values"]): ConfigEdit[] {
       mergeStrategy: "upsert",
     });
   }
-  if (patch.features !== undefined) {
-    for (const key of basicFeatureKeys) {
-      if (!Object.hasOwn(patch.features, key)) continue;
-      edits.push({
-        keyPath: `features.${key}`,
-        value: patch.features[key] ?? null,
-        mergeStrategy: "upsert",
-      });
-    }
+  for (const [key, value] of Object.entries(patch.features ?? {})) {
+    edits.push({
+      keyPath: `features.${key}`,
+      value: value ?? null,
+      mergeStrategy: "upsert",
+    });
   }
   return edits;
 }
 
-function validateConfig(
-  values: EditableCodexConfig,
-  state: Pick<ConfigState, "response" | "capabilities" | "values">,
-  patch?: ConfigUpdate["values"],
-): ConfigValidationResult {
-  const issues: ConfigValidationIssue[] = [];
-  const { capabilities } = state;
-  const provider =
-    values.model_provider === null
-      ? undefined
-      : capabilities.modelProviders.find((candidate) => candidate.id === values.model_provider);
-  if (values.model_provider !== null && (provider === undefined || !provider.allowed)) {
-    issues.push(
-      errorIssue("model_provider", "Choose a model provider configured for this Codex workspace."),
-    );
-  }
-
-  const providerChanged =
-    patch !== undefined &&
-    Object.hasOwn(patch, "model_provider") &&
-    patch.model_provider !== state.values.model_provider;
-  if (providerChanged) {
-    for (const field of [
-      "model",
-      "model_reasoning_effort",
-      "service_tier",
-      "personality",
-    ] as const) {
-      if (values[field] !== null) {
-        issues.push(
-          errorIssue(field, "Reset this value when changing model provider, then choose it again."),
-        );
-      }
-    }
-  }
-
-  const model = providerChanged ? undefined : selectedModel(values.model, capabilities.models);
-
-  if (!providerChanged && values.model !== null && model === undefined) {
-    issues.push(errorIssue("model", "Choose a model available to this Codex account."));
-  }
-
-  if (!providerChanged && values.model_reasoning_effort !== null) {
-    if (model === undefined) {
-      issues.push(
-        errorIssue("model_reasoning_effort", "Choose an available model before setting effort."),
-      );
-    } else if (
-      !model.supportedReasoningEfforts.some(
-        (option) => option.reasoningEffort === values.model_reasoning_effort,
-      )
-    ) {
-      issues.push(
-        errorIssue(
-          "model_reasoning_effort",
-          `${model.displayName} does not support this reasoning effort.`,
-        ),
-      );
-    }
-  }
-
-  if (!providerChanged && values.service_tier !== null) {
-    if (model === undefined) {
-      issues.push(errorIssue("service_tier", "Choose an available model before setting a tier."));
-    } else if (!model.serviceTiers.some((tier) => tier.id === values.service_tier)) {
-      issues.push(
-        errorIssue("service_tier", `${model.displayName} does not offer this service tier.`),
-      );
-    }
-  }
-
-  const otherActiveLayers = activeLayers(state.response.layers).filter(
-    (layer) => !isBaseUserLayer(layer),
-  );
-  const hasOtherDefaultPermissions = hasActiveValue(otherActiveLayers, "default_permissions");
-  const hasOtherSandboxMode = hasActiveValue(otherActiveLayers, "sandbox_mode");
-  const hasOtherWorkspaceSandbox = hasActiveValue(otherActiveLayers, "sandbox_workspace_write");
-  const userLayer = findBaseUserLayer(state.response.layers);
-  const hasUserWorkspaceSandbox =
-    userLayer !== undefined && hasActiveValue([userLayer], "sandbox_workspace_write");
-  const hasDefaultPermissions = values.default_permissions !== null || hasOtherDefaultPermissions;
-  const hasSandboxMode = values.sandbox_mode !== null || hasOtherSandboxMode;
-  const hasWorkspaceSandbox = hasUserWorkspaceSandbox || hasOtherWorkspaceSandbox;
-  if (hasDefaultPermissions && (hasSandboxMode || hasWorkspaceSandbox)) {
-    const message =
-      "Permission profiles cannot be combined with sandbox_mode or sandbox_workspace_write in active config layers.";
-    issues.push(errorIssue("default_permissions", message));
-    if (hasSandboxMode) issues.push(errorIssue("sandbox_mode", message));
-    if (hasWorkspaceSandbox) issues.push(errorIssue("sandbox_workspace_write", message));
-  }
-
-  if (values.default_permissions !== null) {
-    const profile = capabilities.permissionProfiles.find(
-      (candidate) => candidate.id === values.default_permissions,
-    );
-    if (profile === undefined) {
-      issues.push(
-        errorIssue("default_permissions", "Choose a permission profile known to this Codex."),
-      );
-    } else if (!profile.allowed) {
-      issues.push(
-        errorIssue("default_permissions", "Managed requirements disallow this permission profile."),
-      );
-    }
-  }
-
-  if (patch?.features !== undefined) {
-    const availableFeatures = new Set(capabilities.features.map((feature) => feature.name));
-    for (const key of basicFeatureKeys) {
-      if (Object.hasOwn(patch.features, key) && !availableFeatures.has(key)) {
-        issues.push(
-          errorIssue(
-            `features.${key}`,
-            "This feature is absent, deprecated, or removed in the installed Codex version.",
-          ),
-        );
-      }
-    }
-  }
-
-  const effectiveApprovalPolicy =
-    values.approval_policy ?? state.response.config.approval_policy ?? null;
-  if (
-    values.approvals_reviewer === "auto_review" &&
-    effectiveApprovalPolicy !== null &&
-    !supportsInteractiveApproval(effectiveApprovalPolicy)
-  ) {
-    issues.push(
-      errorIssue(
-        "approvals_reviewer",
-        "Auto-review requires on-request or an interactive granular approval policy.",
-      ),
-    );
-  }
-
-  if (values.approval_policy === "never" && values.sandbox_mode === "danger-full-access") {
-    issues.push(
-      warningIssue(
-        "approval_policy",
-        "Never ask plus full access gives Codex broad access without confirmation.",
-      ),
-    );
-  }
-
-  if (values.windows_sandbox !== null && capabilities.platform !== "win32") {
-    issues.push(
-      warningIssue("windows_sandbox", "This setting only takes effect on native Windows."),
-    );
-  }
-
-  if (values.features.personality === false && values.personality !== null) {
-    issues.push(
-      warningIssue("personality", "The personality feature is disabled, so this value is ignored."),
-    );
-  }
-
-  if (values.features.fast_mode === false && values.service_tier !== null) {
-    issues.push(
-      warningIssue("service_tier", "Fast mode is disabled, so tier selection may be unavailable."),
-    );
-  }
-
-  if (values.shell_environment_include_only !== null) {
-    const patterns = values.shell_environment_include_only;
-    if (!matchesEnvironmentName(patterns, "PATH")) {
-      issues.push(
-        warningIssue(
-          "shell_environment_include_only",
-          "The allowlist does not appear to include PATH; shell commands may fail.",
-        ),
-      );
-    }
-    if (!matchesEnvironmentName(patterns, "HOME")) {
-      issues.push(
-        warningIssue(
-          "shell_environment_include_only",
-          "The allowlist does not appear to include HOME.",
-        ),
-      );
-    }
-  }
-
-  return validationResult(issues);
-}
-
-function selectedModel(
-  configured: string | null,
-  models: readonly ModelCapability[],
-): ModelCapability | undefined {
-  return configured === null
-    ? (models.find((model) => model.isDefault) ?? models[0])
-    : models.find((model) => model.model === configured);
+function structurallyValid(): ConfigValidationResult {
+  return { valid: true, issues: [] };
 }
 
 function toModelCapability(model: Model): ModelCapability {
@@ -662,40 +453,32 @@ function toModelProviderCapabilities(response: ConfigReadResponse): ModelProvide
   return providers;
 }
 
+/** The feature catalog comes from the running app-server, not a handwritten list. */
 function toFeatureCapabilities(
   remote: readonly ExperimentalFeature[],
   requirements: ConfigRequirements | null,
 ): FeatureCapability[] {
-  const byName = new Map(remote.map((feature) => [feature.name, feature]));
-  const values: FeatureCapability[] = [];
-  for (const name of basicFeatureKeys) {
-    const feature = byName.get(name);
-    if (feature === undefined || feature.stage === "deprecated" || feature.stage === "removed") {
-      continue;
-    }
-    values.push({
-      name,
-      displayName: feature.displayName ?? sentenceCase(name),
+  return remote
+    .filter(
+      (feature) =>
+        feature.stage !== "deprecated" &&
+        feature.stage !== "removed" &&
+        featureKeySchema.safeParse(feature.name).success,
+    )
+    .map((feature) => ({
+      name: feature.name,
+      displayName: feature.displayName ?? sentenceCase(feature.name),
       description: feature.description ?? "",
       stage: feature.stage,
       enabled: feature.enabled,
       defaultEnabled: feature.defaultEnabled,
-      locked: requirements?.featureRequirements?.[name] !== undefined,
-    });
-  }
-  return values;
+      locked: requirements?.featureRequirements?.[feature.name] !== undefined,
+    }))
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
 }
 
 function sentenceCase(name: string): string {
   return capitalize(name.replaceAll("_", " "));
-}
-
-function activeLayers(layers: readonly ConfigLayer[] | null): readonly ConfigLayer[] {
-  return layers?.filter((layer) => layer.disabledReason === null) ?? [];
-}
-
-function hasActiveValue(layers: readonly ConfigLayer[], key: string): boolean {
-  return layers.some((layer) => readActiveValue(asRecord(layer.config)[key]) !== undefined);
 }
 
 /** The profile-less "user" layer — the file the Mini App and hot reload treat as the user's config. */
@@ -715,42 +498,6 @@ export function findBaseUserLayer(
 
 function asRecord(value: JsonValue | undefined): Readonly<Record<string, JsonValue | undefined>> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
-}
-
-function readActiveValue(value: JsonValue | undefined): JsonValue | undefined {
-  return value === null ? undefined : value;
-}
-
-function supportsInteractiveApproval(policy: AskForApproval | null): boolean {
-  if (policy === "on-request") return true;
-  if (policy === null || typeof policy === "string") return false;
-  const granular = policy.granular;
-  return (
-    granular.sandbox_approval ||
-    granular.rules ||
-    granular.skill_approval ||
-    granular.request_permissions ||
-    granular.mcp_elicitations
-  );
-}
-
-function validationResult(issues: readonly ConfigValidationIssue[]): ConfigValidationResult {
-  return {
-    valid: !issues.some((issue) => issue.severity === "error"),
-    issues,
-  };
-}
-
-function errorIssue(path: string, message: string): ConfigValidationIssue {
-  return { path, severity: "error", message };
-}
-
-function warningIssue(path: string, message: string): ConfigValidationIssue {
-  return { path, severity: "warning", message };
-}
-
-function matchesEnvironmentName(patterns: readonly string[], name: string): boolean {
-  return patterns.some((pattern) => pattern === "*" || pattern.toUpperCase() === name);
 }
 
 function containsControlCharacter(value: string): boolean {

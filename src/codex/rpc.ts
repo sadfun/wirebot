@@ -16,7 +16,7 @@ import { externalProcessEnvironment } from "../shared/environment.js";
 import { BridgeError, errorMessage } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
 import { terminateChild } from "../shared/process.js";
-import { type CodexLaunch, resolveCodexLaunch } from "./linux-sandbox.js";
+import { resolveCodexLaunch } from "./linux-sandbox.js";
 
 /** Whether the error means the app-server transport is gone (never started or exited). */
 export function isCodexTransportUnavailable(error: unknown): boolean {
@@ -101,12 +101,6 @@ export interface CodexAppServerExit {
 }
 
 export type ExitListener = (exit: CodexAppServerExit) => void;
-type CodexLaunchResolver = (
-  binaryPath: string,
-  args: readonly string[],
-  cwd: string,
-  env: NodeJS.ProcessEnv,
-) => Promise<CodexLaunch>;
 
 /** The app-server's transient overloaded/busy JSON-RPC code; such requests retry up to 3 times. */
 const TRANSIENT_OVERLOAD_RPC_CODE = -32_001;
@@ -124,7 +118,6 @@ export class CodexAppServer {
   readonly #codexHome: string;
   readonly #clientVersion: string;
   readonly #logger: Logger;
-  readonly #resolveLaunch: CodexLaunchResolver;
 
   public constructor(
     binaryPath: string,
@@ -132,15 +125,12 @@ export class CodexAppServer {
     codexHome: string,
     clientVersion: string,
     logger: Logger,
-    launchResolver: CodexLaunchResolver = async (path, args, cwd, env) =>
-      await resolveCodexLaunch({ binaryPath: path, args, cwd, env }),
   ) {
     this.#binaryPath = binaryPath;
     this.#workspace = workspace;
     this.#codexHome = codexHome;
     this.#clientVersion = clientVersion;
     this.#logger = logger;
-    this.#resolveLaunch = launchResolver;
   }
 
   public async start(): Promise<InitializeResponse> {
@@ -154,12 +144,12 @@ export class CodexAppServer {
       CODEX_HOME: this.#codexHome,
       LOG_FORMAT: "json",
     });
-    const launch = await this.#resolveLaunch(
-      this.#binaryPath,
-      appServerArgs,
-      this.#workspace,
-      environment,
-    );
+    const launch = await resolveCodexLaunch({
+      binaryPath: this.#binaryPath,
+      args: appServerArgs,
+      cwd: this.#workspace,
+      env: environment,
+    });
     if (launch.appArmorProfile !== undefined) {
       this.#logger.warn("Using an AppArmor userns compatibility profile for Codex sandboxing", {
         profile: launch.appArmorProfile,

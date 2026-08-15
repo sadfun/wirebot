@@ -1,14 +1,9 @@
-import { createHash } from "node:crypto";
-import { cp, readdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { cp, readdir, readFile, rm } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { externalProcessEnvironment } from "../shared/environment.js";
-import {
-  atomicWriteFile,
-  atomicWriteJson,
-  ensureDirectory,
-  readFileIfExists,
-} from "../shared/fs.js";
+import { errorMessage } from "../shared/errors.js";
+import { atomicWriteFile, atomicWriteJson, ensureDirectory } from "../shared/fs.js";
 import type { Logger } from "../shared/logger.js";
 import { runCommand } from "../shared/process.js";
 import { CodexToolchainManager, readPinnedCodexVersion } from "./toolchain.js";
@@ -20,16 +15,8 @@ const protocolMethodsSchema = z.object({
   serverNotifications: z.array(z.string()),
 });
 
-const generatedFilesSchema = z.object({
-  fileCount: z.number().int().nonnegative(),
-  sha256: z.string().regex(/^[0-9a-f]{64}$/),
-});
-
 const protocolManifestSchema = z.object({
-  schemaVersion: z.literal(2),
   codexVersion: z.string(),
-  generatedAt: z.string(),
-  bindings: generatedFilesSchema,
   methods: protocolMethodsSchema,
 });
 
@@ -55,6 +42,8 @@ export interface ProtocolCheckResult {
   readonly applied: boolean;
   readonly generatedTypeFiles: number;
   readonly methodChanges: ProtocolMethodChanges;
+  /** Removed methods that handwritten src/ still references; anything else removed is informational. */
+  readonly breakingRemovals: readonly string[];
   readonly manifest: ProtocolManifest;
 }
 
@@ -107,10 +96,18 @@ export async function checkCodexProtocol(
       experimentalBindingsDirectory,
     );
 
+    const generatedTypeFiles = (await listFiles(bindingsDirectory, ".ts")).length;
+    if (generatedTypeFiles === 0) {
+      throw new Error(`Codex generated no TypeScript files in ${bindingsDirectory}`);
+    }
     const manifest = await createProtocolManifest(candidateVersion, bindingsDirectory);
     const baseline = await readBaselineManifest(projectRoot, previousVersion);
     const methodChanges = compareMethods(baseline.methods, manifest.methods);
-    const compatible = !hasRemovedMethods(methodChanges.removed);
+    const breakingRemovals = await findReferencedMethods(
+      join(projectRoot, "src"),
+      methodGroups.flatMap((group) => [...methodChanges.removed[group]]),
+    );
+    const compatible = breakingRemovals.length === 0;
 
     let applied = false;
     if (options.apply && compatible) {
@@ -123,8 +120,9 @@ export async function checkCodexProtocol(
       candidateVersion,
       compatible,
       applied,
-      generatedTypeFiles: manifest.bindings.fileCount,
+      generatedTypeFiles,
       methodChanges,
+      breakingRemovals,
       manifest,
     };
   } finally {
@@ -136,25 +134,13 @@ async function createProtocolManifest(
   codexVersion: string,
   bindingsDirectory: string,
 ): Promise<ProtocolManifest> {
-  const bindings = await fingerprintFiles(bindingsDirectory, ".ts");
-  if (bindings.fileCount === 0) {
-    throw new Error(`Codex generated no TypeScript files in ${bindingsDirectory}`);
-  }
-
   const methods = await readMethods(bindingsDirectory);
   for (const group of methodGroups) {
     if (methods[group].length === 0) {
       throw new Error(`${methodFiles[group]} contains no JSON-RPC methods`);
     }
   }
-
-  return {
-    schemaVersion: 2,
-    codexVersion,
-    generatedAt: new Date().toISOString(),
-    bindings,
-    methods,
-  };
+  return { codexVersion, methods };
 }
 
 async function generateProtocol(
@@ -218,21 +204,6 @@ async function readBaselineManifest(
   }
 }
 
-async function fingerprintFiles(
-  directory: string,
-  extension: string,
-): Promise<ProtocolManifest["bindings"]> {
-  const files = await listFiles(directory, extension);
-  const hash = createHash("sha256");
-  for (const file of files) {
-    hash.update(file);
-    hash.update("\0");
-    hash.update(await readFile(join(directory, file)));
-    hash.update("\0");
-  }
-  return { fileCount: files.length, sha256: hash.digest("hex") };
-}
-
 async function readMethods(bindingsDirectory: string): Promise<ProtocolMethods> {
   const entries = await Promise.all(
     methodGroups.map(async (group) => {
@@ -273,67 +244,70 @@ function difference(left: readonly string[], right: readonly string[]): readonly
   return left.filter((value) => !rightSet.has(value));
 }
 
-function hasRemovedMethods(methods: ProtocolMethods): boolean {
-  return methodGroups.some((group) => methods[group].length > 0);
+/** Which of the given method names appear as string literals in handwritten src/ (src/generated excluded). */
+async function findReferencedMethods(
+  sourceRoot: string,
+  methods: readonly string[],
+): Promise<readonly string[]> {
+  if (methods.length === 0) return [];
+  const referenced = new Set<string>();
+  const files = await listHandwrittenSources(sourceRoot);
+  for (const file of files) {
+    const content = await readFile(join(sourceRoot, file), "utf8");
+    for (const method of methods) {
+      if (content.includes(`"${method}"`)) referenced.add(method);
+    }
+  }
+  return methods.filter((method) => referenced.has(method));
 }
 
-/** Installs the bindings, typechecks the repo against them, and rolls back on any failure. */
+async function listHandwrittenSources(sourceRoot: string): Promise<readonly string[]> {
+  const files: string[] = [];
+  const visit = async (directory: string): Promise<void> => {
+    const entries = await readdir(join(sourceRoot, directory), { withFileTypes: true });
+    await Promise.all(
+      entries.map(async (entry) => {
+        const child = join(directory, entry.name);
+        if (entry.isDirectory()) {
+          if (normalizePath(child) === "generated") return;
+          await visit(child);
+        } else if (entry.isFile() && (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx"))) {
+          files.push(child);
+        }
+      }),
+    );
+  };
+  await visit("");
+  return files;
+}
+
+/**
+ * Installs the bindings in place and typechecks the repo against them. This is
+ * a maintainer command running in a source checkout, so git is the rollback.
+ */
 async function applyProtocol(
   projectRoot: string,
   bindingsDirectory: string,
   candidateVersion: string,
   manifest: ProtocolManifest,
 ): Promise<void> {
-  const generatedRoot = join(projectRoot, "src", "generated");
-  const target = join(generatedRoot, "codex");
-  const transactionId = crypto.randomUUID();
-  const incoming = join(generatedRoot, `.codex.incoming.${transactionId}`);
-  const backup = join(generatedRoot, `.codex.backup.${transactionId}`);
-  const versionPath = join(projectRoot, "codex.version");
-  const manifestPath = join(incoming, "protocol-manifest.json");
-  const oldVersion = await readFileIfExists(versionPath);
-  let movedCurrent = false;
-  let installedIncoming = false;
-
-  await ensureDirectory(generatedRoot);
-  await cp(bindingsDirectory, incoming, { recursive: true });
-  await atomicWriteJson(manifestPath, manifest);
+  const target = join(projectRoot, "src", "generated", "codex");
+  await ensureDirectory(join(projectRoot, "src", "generated"));
+  await rm(target, { recursive: true, force: true });
+  await cp(bindingsDirectory, target, { recursive: true });
+  await atomicWriteJson(join(target, "protocol-manifest.json"), manifest);
+  await atomicWriteFile(join(projectRoot, "codex.version"), `${candidateVersion}\n`);
   try {
-    if (await pathExists(target)) {
-      await rename(target, backup);
-      movedCurrent = true;
-    }
-    await rename(incoming, target);
-    installedIncoming = true;
-    await atomicWriteFile(versionPath, `${candidateVersion}\n`);
     await runCommand(
       join(projectRoot, "node_modules", ".bin", "tsc"),
       ["-p", join(projectRoot, "tsconfig.json")],
       { cwd: projectRoot, env: externalProcessEnvironment() },
     );
-    if (movedCurrent) await rm(backup, { recursive: true, force: true });
   } catch (error) {
-    if (installedIncoming) await rm(target, { recursive: true, force: true });
-    if (movedCurrent) await rename(backup, target);
-    await restoreOptionalFile(versionPath, oldVersion);
-    throw error;
-  } finally {
-    await rm(incoming, { recursive: true, force: true });
-  }
-}
-
-async function restoreOptionalFile(path: string, contents: string | undefined): Promise<void> {
-  if (contents === undefined) await rm(path, { force: true });
-  else await atomicWriteFile(path, contents);
-}
-
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
+    throw new Error(
+      `Typecheck failed against the Codex ${candidateVersion} bindings: ${errorMessage(error)}\n` +
+        "Restore the previous protocol with: git checkout -- src/generated/codex codex.version",
+    );
   }
 }
 
@@ -369,17 +343,28 @@ export function formatProtocolCheck(result: ProtocolCheckResult): string {
     `Codex protocol ${result.previousVersion} -> ${result.candidateVersion}`,
     `Generated ${result.generatedTypeFiles} TypeScript files.`,
   ];
+  let removals = false;
   for (const group of methodGroups) {
     const added = result.methodChanges.added[group];
     const removed = result.methodChanges.removed[group];
     if (added.length > 0) lines.push(`Added ${group}: ${added.join(", ")}`);
-    if (removed.length > 0) lines.push(`Removed ${group}: ${removed.join(", ")}`);
+    if (removed.length > 0) {
+      removals = true;
+      lines.push(`Removed ${group}: ${removed.join(", ")}`);
+    }
+  }
+  if (result.breakingRemovals.length > 0) {
+    lines.push(
+      `Removed methods still referenced in handwritten src/: ${result.breakingRemovals.join(", ")}`,
+    );
+  } else if (removals) {
+    lines.push("Removed methods are not referenced in handwritten src/ (informational).");
   }
   lines.push(
     result.compatible
       ? "Result: COMPATIBLE with this bridge."
       : "Result: BREAKING; update the bridge before applying this protocol.",
   );
-  if (result.applied) lines.push(`Applied Codex ${result.candidateVersion} protocol atomically.`);
+  if (result.applied) lines.push(`Applied the Codex ${result.candidateVersion} protocol.`);
   return lines.join("\n");
 }

@@ -18,21 +18,22 @@ import {
   botCommands,
   conversationScopedCommands,
   instanceAdminCommands,
+  instanceAdminOnlyText,
 } from "../../core/bridge.js";
-import {
-  type ChoiceOption,
-  type DeliveryReceipt,
-  type InboundMessage,
-  type MessageHandler,
-  type MessagingChannel,
-  type OutboundMessage,
-  type ProviderReference,
-  registerChannelTraits,
+import type {
+  ChoiceOption,
+  DeliveryReceipt,
+  InboundMessage,
+  MessageHandler,
+  MessagingChannel,
+  OutboundMessage,
+  ProviderReference,
 } from "../../core/channel.js";
 import { trimInsertionOrdered } from "../../shared/collections.js";
 import { errorMessage } from "../../shared/errors.js";
 import type { Logger } from "../../shared/logger.js";
 import { PendingChoices } from "../choices.js";
+import { decodeCommandAction } from "../command-actions.js";
 import { type CodexConfigAccess, DiscordConfigUi, discordConfigActionPrefix } from "./config-ui.js";
 import {
   discordDisplayName,
@@ -55,7 +56,6 @@ import {
   type DiscordInitialReply,
   type DiscordMessagingApi,
   DiscordResponder,
-  decodeDiscordCommandId,
   publishDiscordMessage,
 } from "./reply.js";
 
@@ -72,8 +72,6 @@ interface DiscordReplyRoute {
 
 const recentEventLimit = 1_000;
 const engagedThreadLimit = 500;
-const adminOnlyText =
-  "This command changes Wirebot for everyone using it and is limited to its admins.";
 
 export class DiscordChannel implements MessagingChannel {
   public readonly name = "discord";
@@ -102,10 +100,6 @@ export class DiscordChannel implements MessagingChannel {
     this.#allowedUserIds = config.allowedUserIds;
     this.#adminUserIds = config.adminUserIds;
     this.#logger = logger;
-    registerChannelTraits(this.name, {
-      commandText: (command) => `/wirebot ${command}`,
-      supportsFileDelivery: false,
-    });
     this.#client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -268,6 +262,7 @@ export class DiscordChannel implements MessagingChannel {
       text,
       ...(command === undefined ? {} : { command }),
       attachments: [],
+      isAdmin: this.isAdmin(userId),
       responder,
     };
     await this.dispatch(inbound, userId, replyRoute.channelId);
@@ -412,11 +407,12 @@ export class DiscordChannel implements MessagingChannel {
       ...(command === undefined ? {} : { command: command.name }),
       chars: inbound.text.length,
     });
-    if (command !== undefined && instanceAdminCommands.has(command.name) && !this.isAdmin(userId)) {
-      await inbound.responder.sendText(adminOnlyText);
-      return;
-    }
     if (command?.name === "config" && this.#configUi !== undefined) {
+      // The bridge never sees this command, so its admin gate cannot apply here.
+      if (!inbound.isAdmin) {
+        await inbound.responder.sendText(instanceAdminOnlyText);
+        return;
+      }
       if (!inbound.address.isPrivate) {
         await inbound.responder.sendText("Open Codex settings in a direct message with the bot.");
         return;
@@ -474,10 +470,6 @@ export class DiscordChannel implements MessagingChannel {
       return;
     }
     const name = interaction.options.getSubcommand();
-    if (instanceAdminCommands.has(name) && !this.isAdmin(userId)) {
-      await interaction.reply({ content: adminOnlyText, flags: MessageFlags.Ephemeral });
-      return;
-    }
     const isPrivate = interaction.channel?.isDMBased() === true;
     const isThread = interaction.channel?.isThread() === true;
     if (!isPrivate && !isThread && conversationScopedCommands.has(name)) {
@@ -489,6 +481,11 @@ export class DiscordChannel implements MessagingChannel {
       return;
     }
     if (name === "config" && this.#configUi !== undefined) {
+      // The bridge never sees this command, so its admin gate cannot apply here.
+      if (!this.isAdmin(userId)) {
+        await interaction.reply({ content: instanceAdminOnlyText, flags: MessageFlags.Ephemeral });
+        return;
+      }
       if (!isPrivate) {
         await interaction.reply({
           content: "Open Codex settings in a direct message with the bot.",
@@ -541,6 +538,7 @@ export class DiscordChannel implements MessagingChannel {
       text: `/wirebot ${name}`,
       command,
       attachments: [],
+      isAdmin: this.isAdmin(userId),
       responder,
     };
     await this.dispatch(inbound, userId, channelId);
@@ -557,7 +555,7 @@ export class DiscordChannel implements MessagingChannel {
       await this.#configUi?.showOverview(interaction.channelId, interaction.message.id);
       return;
     }
-    const command = decodeDiscordCommandId(interaction.customId);
+    const command = decodeCommandAction(interaction.customId);
     if (command !== undefined) await this.handleCommandButton(interaction, command);
   }
 
@@ -621,12 +619,6 @@ export class DiscordChannel implements MessagingChannel {
         .catch(() => undefined);
       return;
     }
-    if (instanceAdminCommands.has(command.name) && !this.isAdmin(userId)) {
-      await interaction
-        .followUp({ content: adminOnlyText, flags: MessageFlags.Ephemeral })
-        .catch(() => undefined);
-      return;
-    }
     await this.#api
       .updateMessage({
         channelId,
@@ -652,6 +644,7 @@ export class DiscordChannel implements MessagingChannel {
       text: `/${command.name}${command.args.length === 0 ? "" : ` ${command.args}`}`,
       command,
       attachments: [],
+      isAdmin: this.isAdmin(userId),
       responder,
     };
     await this.dispatch(inbound, userId, channelId);

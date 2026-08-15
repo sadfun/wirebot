@@ -130,6 +130,11 @@ export interface InboundMessage {
   readonly syntheticText?: boolean;
   readonly command?: InboundCommand;
   readonly attachments: readonly InboundAttachment[];
+  /**
+   * Whether the sender may run instance-admin commands. Connectors compute it
+   * from their admin configuration; the bridge enforces it once.
+   */
+  readonly isAdmin: boolean;
   readonly responder: MessageResponder;
   /**
    * Release provider-owned temporary resources after the message is fully
@@ -157,15 +162,21 @@ const defaultTraits: ChannelTraits = {
   supportsFileDelivery: true,
 };
 
-const registeredTraits = new Map<string, ChannelTraits>();
-
-/** Channels whose traits differ from the defaults register them at construction. */
-export function registerChannelTraits(channel: string, traits: ChannelTraits): void {
-  registeredTraits.set(channel, traits);
-}
+/** Static traits per connector; Telegram matches the defaults. */
+const connectorTraits: Readonly<Record<string, ChannelTraits>> = {
+  telegram: defaultTraits,
+  slack: {
+    commandText: (command) => `/wirebot ${command}`,
+    supportsFileDelivery: true,
+  },
+  discord: {
+    commandText: (command) => `/wirebot ${command}`,
+    supportsFileDelivery: false,
+  },
+};
 
 export function channelTraits(channel: string): ChannelTraits {
-  return registeredTraits.get(channel) ?? defaultTraits;
+  return connectorTraits[channel] ?? defaultTraits;
 }
 
 export interface MessagingChannel {

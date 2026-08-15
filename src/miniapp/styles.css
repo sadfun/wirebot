@@ -1445,43 +1445,12 @@ button {
   font-weight: 600;
 }
 
-.reasoningSlider {
-  min-height: 34px;
-  margin: 7px 0 0;
-  padding: 11px 3px;
-}
-
-.reasoningTicks {
-  position: relative;
-  height: 14px;
-  margin: 2px 3px 0;
-  color: var(--muted-foreground);
-}
-
-.reasoningTick {
-  position: absolute;
-  top: 0;
-  max-width: 5rem;
-  overflow: hidden;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 14px;
-  text-overflow: ellipsis;
-  transform: translateX(-50%);
-  white-space: nowrap;
-}
-
-.reasoningTick:first-child {
-  transform: none;
-}
-
-.reasoningTick:last-child {
-  transform: translateX(-100%);
-}
-
-.reasoningTickActive {
-  color: var(--primary);
-  font-weight: 600;
+.effortPicker {
+  display: grid;
+  margin-top: 7px;
+  gap: 5px;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
 }
 
 .reasoningField .fieldHint {

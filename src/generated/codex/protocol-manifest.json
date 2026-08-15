@@ -1,11 +1,5 @@
 {
-  "schemaVersion": 2,
   "codexVersion": "0.145.0",
-  "generatedAt": "2026-07-23T10:18:44.484Z",
-  "bindings": {
-    "fileCount": 617,
-    "sha256": "125dea8051ad1d8ae9c9c527e30d1d6aada2965fd1e77771f7c18806c77a6724"
-  },
   "methods": {
     "clientRequests": [
       "account/login/cancel",

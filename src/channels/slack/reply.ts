@@ -8,6 +8,7 @@ import type {
   SendOptions,
 } from "../../core/channel.js";
 import type { Logger } from "../../shared/logger.js";
+import { encodeCommandAction } from "../command-actions.js";
 import { DraftReplyStream } from "../draft-stream.js";
 import { splitMessageText } from "../progress.js";
 import { escapeSlackEntities, markdownToMrkdwn } from "./format.js";
@@ -102,23 +103,8 @@ export function choicePromptText(prompt: string, options: readonly ChoiceOption[
   return body.length <= 3_000 ? body : `${body.slice(0, 2_999)}…`;
 }
 
-export function decodeSlackCommandValue(
-  value: string,
-): Readonly<{ name: string; args: string }> | undefined {
-  const match = /^tx:([a-z][a-z0-9_]*):(.*)$/u.exec(value);
-  const name = match?.[1];
-  const args = match?.[2];
-  return name === undefined || args === undefined ? undefined : { name, args };
-}
-
 function encodeSlackCommandValue(name: string, args: string): string {
-  if (
-    !/^[a-z][a-z0-9_]*$/u.test(name) ||
-    [...args].some((character) => character === ":" || character.charCodeAt(0) < 32)
-  ) {
-    throw new Error("Provider command action is not safe for a Slack button value");
-  }
-  const value = `tx:${name}:${args}`;
+  const value = encodeCommandAction(name, args);
   if (Buffer.byteLength(value, "utf8") > 2_000) {
     throw new Error("Provider command action exceeds Slack's button value limit");
   }
@@ -219,7 +205,6 @@ export class SlackResponder implements MessageResponder {
   readonly #requestChoice: SlackChoiceRequester;
   readonly #logger: Logger;
   readonly #fallbackWebhookUrl: string | undefined;
-  readonly #fetch: typeof globalThis.fetch;
 
   public constructor(
     api: SlackMessagingApi,
@@ -229,7 +214,6 @@ export class SlackResponder implements MessageResponder {
     requestChoice: SlackChoiceRequester,
     logger: Logger,
     fallbackWebhookUrl?: string,
-    fetchImplementation: typeof globalThis.fetch = globalThis.fetch,
   ) {
     this.#api = api;
     this.#channel = channel;
@@ -238,7 +222,6 @@ export class SlackResponder implements MessageResponder {
     this.#requestChoice = requestChoice;
     this.#logger = logger;
     this.#fallbackWebhookUrl = fallbackWebhookUrl;
-    this.#fetch = fetchImplementation;
   }
 
   public createStream(): OutboundStream {
@@ -296,7 +279,7 @@ export class SlackResponder implements MessageResponder {
   private async respondThroughWebhook(text: string): Promise<void> {
     const url = this.#fallbackWebhookUrl;
     if (url === undefined) return;
-    const response = await this.#fetch(url, {
+    const response = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ response_type: "ephemeral", text: text.slice(0, slackTextLimit) }),

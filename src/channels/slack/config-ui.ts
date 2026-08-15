@@ -5,13 +5,9 @@ import {
   applyConfigValue,
   type CodexConfigAccess,
   type ConfigFieldKey,
-  configFieldKeys,
-  defaultOptionValue,
-  displayValue,
   fieldKey,
-  fieldLabels,
-  fieldNotes,
-  fieldOptions,
+  overviewModel,
+  pickerModel,
 } from "../config-fields.js";
 import { escapeSlackEntities } from "./format.js";
 import type { SlackBlock, SlackButtonElement, SlackMessagingApi } from "./reply.js";
@@ -82,29 +78,24 @@ export class SlackConfigUi {
   }
 }
 
-export function overviewScreen(
+function overviewScreen(
   snapshot: EditableConfigSnapshot,
   status?: string,
 ): { text: string; blocks: readonly SlackBlock[] } {
-  const lines = configFieldKeys.map(
-    (field) => `*${fieldLabels[field]}*: ${escapeSlackEntities(displayValue(snapshot, field))}`,
-  );
-  const warnings = snapshot.validation.issues
-    .map((issue) => `⚠️ ${escapeSlackEntities(`${issue.path}: ${issue.message}`)}`)
-    .slice(0, 3);
+  const model = overviewModel(snapshot, status);
   const header = [
-    "*Codex settings*",
-    ...(status === undefined ? [] : [escapeSlackEntities(status)]),
-    ...lines,
-    ...warnings,
-    "_Everyone using this Wirebot shares these settings._",
+    `*${model.title}*`,
+    ...(model.status === undefined ? [] : [escapeSlackEntities(model.status)]),
+    ...model.fields.map((field) => `*${field.label}*: ${escapeSlackEntities(field.value)}`),
+    ...model.warnings.map((warning) => escapeSlackEntities(warning)),
+    `_${model.footer}_`,
   ].join("\n");
-  const buttons = configFieldKeys.map(
+  const buttons = model.fields.map(
     (field, index): SlackButtonElement => ({
       type: "button",
-      text: { type: "plain_text", text: fieldLabels[field] },
+      text: { type: "plain_text", text: field.label },
       action_id: `${slackConfigActionPrefix}_pick_${index}`,
-      value: `pick:${field}`,
+      value: `pick:${field.key}`,
     }),
   );
   return {
@@ -116,25 +107,21 @@ export function overviewScreen(
   };
 }
 
-export function pickerScreen(
+function pickerScreen(
   snapshot: EditableConfigSnapshot,
   field: ConfigFieldKey,
 ): { text: string; blocks: readonly SlackBlock[] } {
-  const note = fieldNotes[field];
+  const model = pickerModel(snapshot, field);
   const header = [
-    `*${fieldLabels[field]}* — current: ${escapeSlackEntities(displayValue(snapshot, field))}`,
-    ...(note === undefined ? [] : [escapeSlackEntities(note)]),
+    `*${model.label}* — current: ${escapeSlackEntities(model.currentValue)}`,
+    ...(model.note === undefined ? [] : [escapeSlackEntities(model.note)]),
   ].join("\n");
-  const current = snapshot.values[field];
-  const buttons = fieldOptions(snapshot, field).map(
+  const buttons = model.options.map(
     (option, index): SlackButtonElement => ({
       type: "button",
-      text: {
-        type: "plain_text",
-        text: `${option.value === current ? "✓ " : ""}${option.label}`.slice(0, 75),
-      },
+      text: { type: "plain_text", text: option.label.slice(0, 75) },
       action_id: `${slackConfigActionPrefix}_set_${index}`,
-      value: `set:${field}:${option.value === null ? defaultOptionValue : encodeURIComponent(option.value)}`,
+      value: `set:${model.field}:${option.encodedValue}`,
     }),
   );
   const back: SlackButtonElement = {
@@ -144,7 +131,7 @@ export function pickerScreen(
     value: "menu",
   };
   return {
-    text: `Codex settings — ${fieldLabels[field]}`,
+    text: `Codex settings — ${model.label}`,
     blocks: [
       { type: "section", text: { type: "mrkdwn", text: header.slice(0, 3_000) } },
       ...chunkButtons([...buttons, back]),

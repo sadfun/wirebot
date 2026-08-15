@@ -12,13 +12,9 @@ import {
   applyConfigValue,
   type CodexConfigAccess,
   type ConfigFieldKey,
-  configFieldKeys,
-  defaultOptionValue,
-  displayValue,
   fieldKey,
-  fieldLabels,
-  fieldNotes,
-  fieldOptions,
+  overviewModel,
+  pickerModel,
 } from "../config-fields.js";
 import type { DiscordActionRow, DiscordMessagingApi } from "./reply.js";
 
@@ -92,18 +88,13 @@ export class DiscordConfigUi {
 }
 
 function overviewScreen(snapshot: EditableConfigSnapshot, status?: string): DiscordConfigScreen {
-  const values = configFieldKeys.map(
-    (field) => `**${fieldLabels[field]}:** ${displayValue(snapshot, field)}`,
-  );
-  const warnings = snapshot.validation.issues
-    .map((issue) => `⚠️ ${issue.path}: ${issue.message}`)
-    .slice(0, 3);
+  const model = overviewModel(snapshot, status);
   const content = [
-    "**Codex settings**",
-    ...(status === undefined ? [] : [status]),
-    ...values,
-    ...warnings,
-    "_Everyone using this Wirebot shares these settings._",
+    `**${model.title}**`,
+    ...(model.status === undefined ? [] : [model.status]),
+    ...model.fields.map((field) => `**${field.label}:** ${field.value}`),
+    ...model.warnings,
+    `_${model.footer}_`,
   ]
     .join("\n")
     .slice(0, 2_000);
@@ -111,10 +102,10 @@ function overviewScreen(snapshot: EditableConfigSnapshot, status?: string): Disc
     .setCustomId(`${discordConfigActionPrefix}:field`)
     .setPlaceholder("Choose a setting")
     .addOptions(
-      configFieldKeys.map((field) => ({
-        label: fieldLabels[field],
-        value: field,
-        description: `Current: ${displayValue(snapshot, field)}`.slice(0, 100),
+      model.fields.map((field) => ({
+        label: field.label,
+        value: field.key,
+        description: `Current: ${field.value}`.slice(0, 100),
       })),
     );
   return { content, components: [row(menu)] };
@@ -124,12 +115,11 @@ function pickerScreen(
   snapshot: EditableConfigSnapshot,
   field: ConfigFieldKey,
 ): DiscordConfigScreen {
-  const note = fieldNotes[field];
-  const current = snapshot.values[field];
-  const options = fieldOptions(snapshot, field)
+  const model = pickerModel(snapshot, field);
+  const options = model.options
     .map((option) => ({
-      label: `${option.value === current ? "✓ " : ""}${option.label}`.slice(0, 100),
-      value: option.value === null ? defaultOptionValue : encodeURIComponent(option.value),
+      label: option.label.slice(0, 100),
+      value: option.encodedValue,
     }))
     .filter((option) => option.value.length <= 100)
     .slice(0, 25);
@@ -138,8 +128,8 @@ function pickerScreen(
     .setLabel("Back")
     .setStyle(ButtonStyle.Secondary);
   const content = [
-    `**${fieldLabels[field]}** — current: ${displayValue(snapshot, field)}`,
-    ...(note === undefined ? [] : [note]),
+    `**${model.label}** — current: ${model.currentValue}`,
+    ...(model.note === undefined ? [] : [model.note]),
   ].join("\n");
   return {
     content,
@@ -149,8 +139,8 @@ function pickerScreen(
         : [
             row(
               new StringSelectMenuBuilder()
-                .setCustomId(`${discordConfigActionPrefix}:value:${field}`)
-                .setPlaceholder(`Choose ${fieldLabels[field].toLowerCase()}`)
+                .setCustomId(`${discordConfigActionPrefix}:value:${model.field}`)
+                .setPlaceholder(`Choose ${model.label.toLowerCase()}`)
                 .addOptions(options),
             ),
             row(back),

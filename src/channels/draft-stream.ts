@@ -2,6 +2,8 @@ import type { OutboundAttachment, OutboundStream, ProgressSnapshot } from "../co
 import { errorMessage } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
 import { truncate } from "../shared/text.js";
+import { CompletionGuard } from "./completion-guard.js";
+import { DraftThrottle } from "./draft-throttle.js";
 import { formatThinkingBlock, splitMessageText } from "./progress.js";
 
 /**
@@ -16,14 +18,19 @@ export abstract class DraftReplyStream implements OutboundStream {
   #finalText = "";
   #messageId: string | undefined;
   #starting: Promise<void> | undefined;
-  #lastDraftAt = 0;
   #lastPublishedText = "";
-  #draftDirty = false;
-  #draftTimer: NodeJS.Timeout | undefined;
-  #draftInFlight: Promise<void> | undefined;
-  #closing = false;
-  #completing: Promise<void> | undefined;
-  #completed = false;
+  readonly #lifecycle = new CompletionGuard();
+  readonly #throttle = new DraftThrottle(
+    DraftReplyStream.#draftIntervalMs,
+    async () => await this.flushDraft(),
+    {
+      onError: (error: unknown) => {
+        this.logger.debug(`${this.#channelLabel} draft update failed`, {
+          error: errorMessage(error),
+        });
+      },
+    },
+  );
   #loggedActions = 0;
   #lastReasoning = "";
   readonly #channelLabel: string;
@@ -67,16 +74,16 @@ export abstract class DraftReplyStream implements OutboundStream {
   }
 
   public async start(initialProgress?: ProgressSnapshot): Promise<void> {
-    if (this.#closing || this.#completed || this.#messageId !== undefined) return;
+    if (this.#lifecycle.closed || this.#messageId !== undefined) return;
     if (this.#starting !== undefined) return await this.#starting;
     if (initialProgress !== undefined) this.#progress = initialProgress;
     const preview = this.preview();
     const post = this.postInitial(preview)
       .then((messageId) => {
         this.#messageId = messageId;
-        this.#lastDraftAt = Date.now();
+        this.#throttle.touch();
         this.#lastPublishedText = preview;
-        if (this.#draftDirty) this.scheduleDraft(true);
+        if (this.#throttle.dirty) this.scheduleDraft(true);
       })
       .catch((error: unknown) => {
         this.logger.debug(`${this.#channelLabel} progress message could not be posted`, {
@@ -93,7 +100,7 @@ export abstract class DraftReplyStream implements OutboundStream {
   }
 
   public setProgress(progress: ProgressSnapshot): void {
-    if (this.#closing || this.#completed) return;
+    if (this.#lifecycle.closed) return;
     // Mirror the run into stdout: every tool call once, and reasoning
     // summaries as they change.
     for (const action of progress.actions.slice(this.#loggedActions)) {
@@ -110,7 +117,7 @@ export abstract class DraftReplyStream implements OutboundStream {
   }
 
   public appendFinal(delta: string): void {
-    if (this.#closing || this.#completed) return;
+    if (this.#lifecycle.closed) return;
     this.#finalText += delta;
     this.scheduleDraft();
   }
@@ -119,19 +126,9 @@ export abstract class DraftReplyStream implements OutboundStream {
     text: string,
     attachments: readonly OutboundAttachment[] = [],
   ): Promise<void> {
-    if (this.#completed) return;
-    if (this.#completing !== undefined) return await this.#completing;
-
-    this.#closing = true;
-    const completion = this.finish(this.prepareFinalText(text, attachments), attachments);
-    this.#completing = completion;
-    try {
-      await completion;
-      this.#completed = true;
-    } finally {
-      if (this.#completing === completion) this.#completing = undefined;
-      if (!this.#completed) this.#closing = false;
-    }
+    await this.#lifecycle.run(
+      async () => await this.finish(this.prepareFinalText(text, attachments), attachments),
+    );
   }
 
   public async fail(message: string): Promise<void> {
@@ -139,9 +136,9 @@ export abstract class DraftReplyStream implements OutboundStream {
   }
 
   private async finish(text: string, attachments: readonly OutboundAttachment[]): Promise<void> {
-    this.clearTimer();
+    this.#throttle.clear();
     await this.#starting?.catch(() => undefined);
-    await this.#draftInFlight?.catch(() => undefined);
+    await this.#throttle.settle();
     if (text.length > 0) {
       this.logger.info("Codex answer delivered", { chars: text.length });
     }
@@ -181,55 +178,20 @@ export abstract class DraftReplyStream implements OutboundStream {
   }
 
   private scheduleDraft(immediate = false): void {
-    if (this.#closing || this.#completed) return;
-    this.#draftDirty = true;
-    if (this.#messageId === undefined || this.#draftInFlight !== undefined) return;
-
-    const wait = immediate
-      ? 0
-      : Math.max(0, DraftReplyStream.#draftIntervalMs - (Date.now() - this.#lastDraftAt));
-    if (wait === 0) {
-      this.startDraftUpdate();
+    if (this.#lifecycle.closed) return;
+    if (this.#messageId === undefined) {
+      // No progress message yet; start() re-schedules once it is posted.
+      this.#throttle.markDirty();
       return;
     }
-    if (this.#draftTimer !== undefined) return;
-    this.#draftTimer = setTimeout(() => {
-      this.#draftTimer = undefined;
-      this.startDraftUpdate();
-    }, wait);
-    this.#draftTimer.unref();
-  }
-
-  private startDraftUpdate(): void {
-    if (
-      this.#closing ||
-      this.#completed ||
-      this.#messageId === undefined ||
-      this.#draftInFlight !== undefined ||
-      !this.#draftDirty
-    ) {
-      return;
-    }
-
-    this.#draftDirty = false;
-    const update = this.flushDraft().catch((error: unknown) => {
-      this.logger.debug(`${this.#channelLabel} draft update failed`, {
-        error: errorMessage(error),
-      });
-    });
-    this.#draftInFlight = update;
-    void update.finally(() => {
-      if (this.#draftInFlight === update) this.#draftInFlight = undefined;
-      if (this.#draftDirty) this.scheduleDraft();
-    });
+    this.#throttle.schedule(immediate);
   }
 
   private async flushDraft(): Promise<void> {
     const messageId = this.#messageId;
-    if (this.#closing || this.#completed || messageId === undefined) return;
+    if (this.#lifecycle.closed || messageId === undefined) return;
     const preview = this.preview();
     if (preview === this.#lastPublishedText) return;
-    this.#lastDraftAt = Date.now();
     await this.update(messageId, preview);
     this.#lastPublishedText = preview;
   }
@@ -246,11 +208,5 @@ export abstract class DraftReplyStream implements OutboundStream {
     const available = Math.max(0, this.#textLimit - progress.length - 3);
     const finalText = available === 0 ? "" : this.renderFinal(this.#finalText).slice(-available);
     return `${progress}\n\n${finalText}▌`;
-  }
-
-  private clearTimer(): void {
-    if (this.#draftTimer !== undefined) clearTimeout(this.#draftTimer);
-    this.#draftTimer = undefined;
-    this.#draftDirty = false;
   }
 }

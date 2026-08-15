@@ -3,8 +3,6 @@ import { compactTruncate, formatBytes } from "../../shared/text.js";
 
 export interface DiscordIncomingRoute {
   readonly isPrivate: boolean;
-  readonly explicitMention: boolean;
-  readonly replyToBot: boolean;
 }
 
 /**
@@ -29,7 +27,7 @@ export function routeDiscordMessage(
   const replyToBot = message.mentions.repliedUser?.id === botUserId;
   const botOwnedThread = message.channel.isThread() && message.channel.ownerId === botUserId;
   if (!isPrivate && !explicitMention && !replyToBot && !botOwnedThread) return undefined;
-  return { isPrivate, explicitMention, replyToBot };
+  return { isPrivate };
 }
 
 export function parseDiscordCommand(

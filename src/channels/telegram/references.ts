@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ProviderReference } from "../../core/channel.js";
-import { decodeBase64UrlJson } from "../../shared/text.js";
+import { decodeBase64UrlJson, encodeBase64UrlJson } from "../../shared/text.js";
 import type { TelegramDestination, TelegramReplyRoute } from "./route.js";
 
 /**
@@ -34,7 +34,7 @@ export function telegramDeliveryTarget(
   return {
     provider: "telegram",
     resource: "destination",
-    id: encodeReference({
+    id: encodeBase64UrlJson({
       version: 1,
       chatId,
       destination: route.destination,
@@ -48,7 +48,7 @@ export function parseTelegramDeliveryTarget(
   if (reference.provider !== "telegram" || reference.resource !== "destination") {
     throw new Error("The delivery target does not belong to Telegram");
   }
-  const parsed = targetSchema.parse(decodeReference(reference.id));
+  const parsed = targetSchema.parse(decodeBase64UrlJson(reference.id));
   return { chatId: parsed.chatId, destination: parsed.destination };
 }
 
@@ -56,14 +56,6 @@ export function telegramMessageReference(chatId: number, messageId: number): Pro
   return {
     provider: "telegram",
     resource: "message",
-    id: encodeReference({ version: 1, chatId, messageId }),
+    id: encodeBase64UrlJson({ version: 1, chatId, messageId }),
   };
-}
-
-function encodeReference(value: unknown): string {
-  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
-}
-
-function decodeReference(value: string): unknown {
-  return decodeBase64UrlJson(value);
 }

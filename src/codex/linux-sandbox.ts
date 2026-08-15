@@ -14,17 +14,11 @@ export interface CodexLaunch {
   readonly appArmorProfile?: string;
 }
 
-type CommandRunner = typeof runCommand;
-
 interface CodexLaunchResolverOptions {
   readonly binaryPath: string;
   readonly args: readonly string[];
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
-  readonly platform?: NodeJS.Platform;
-  readonly commandRunner?: CommandRunner;
-  readonly aaExecPath?: string;
-  readonly appArmorProfiles?: readonly string[];
 }
 
 /**
@@ -38,21 +32,20 @@ export async function resolveCodexLaunch(
   options: CodexLaunchResolverOptions,
 ): Promise<CodexLaunch> {
   const direct = { executable: options.binaryPath, args: options.args };
-  if ((options.platform ?? process.platform) !== "linux") return direct;
+  if (process.platform !== "linux") return direct;
 
-  const run = options.commandRunner ?? runCommand;
   const probeArgs = ["sandbox", "/bin/true"] as const;
   try {
-    await run(options.binaryPath, probeArgs, { cwd: options.cwd, env: options.env });
+    await runCommand(options.binaryPath, probeArgs, { cwd: options.cwd, env: options.env });
     return direct;
   } catch (error) {
     if (!isBubblewrapUsernsFailure(errorMessage(error))) return direct;
   }
 
-  const aaExec = options.aaExecPath ?? "/usr/bin/aa-exec";
-  for (const profile of options.appArmorProfiles ?? APPARMOR_USERNS_PROFILES) {
+  const aaExec = "/usr/bin/aa-exec";
+  for (const profile of APPARMOR_USERNS_PROFILES) {
     try {
-      await run(aaExec, ["-p", profile, "--", options.binaryPath, ...probeArgs], {
+      await runCommand(aaExec, ["-p", profile, "--", options.binaryPath, ...probeArgs], {
         cwd: options.cwd,
         env: options.env,
       });

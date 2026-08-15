@@ -22,7 +22,6 @@ interface DownloadOptions {
   readonly botToken: string;
   readonly directory: string;
   readonly index: number;
-  readonly fetch?: typeof globalThis.fetch;
 }
 
 export async function downloadSlackFile(
@@ -60,7 +59,7 @@ export async function downloadSlackFile(
 
   let response: Response;
   try {
-    response = await (options.fetch ?? globalThis.fetch)(url, {
+    response = await fetch(url, {
       headers: { authorization: `Bearer ${options.botToken}` },
       signal: AbortSignal.timeout(slackFileDownloadTimeoutMs),
     });

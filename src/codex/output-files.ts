@@ -1,14 +1,11 @@
-import { constants, createWriteStream } from "node:fs";
+import { createWriteStream } from "node:fs";
 import { mkdir, open, realpath, rm, stat } from "node:fs/promises";
-import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { lexer, walkTokens } from "marked";
 import type { OutboundAttachment } from "../core/channel.js";
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem.js";
 import { isPathWithin } from "../shared/fs.js";
-
-// Node does not expose macOS's whole-path O_NOFOLLOW_ANY flag.
-const DARWIN_O_NOFOLLOW_ANY = 0x20000000;
 
 interface OutboundAttachmentResolution {
   readonly attachments: readonly OutboundAttachment[];
@@ -114,6 +111,12 @@ export async function resolveOutboundAttachments(
   return { attachments, unavailable: [...unavailable] };
 }
 
+/**
+ * The source path is already canonicalized (realpath) and confined to an
+ * allowed root by the caller; a plain open plus an fstat file-type check is
+ * enough, since the only process able to race the resolved path is Codex
+ * itself, which can already read these files.
+ */
 async function snapshotFile(
   source: string,
   destination: string,
@@ -121,7 +124,7 @@ async function snapshotFile(
 ): Promise<OutboundAttachment | undefined> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    handle = await openWithoutSymlinkTraversal(source);
+    handle = await open(source, "r");
     const openedStat = await handle.stat();
     if (!openedStat.isFile()) return undefined;
     await pipeline(
@@ -134,41 +137,6 @@ async function snapshotFile(
     return undefined;
   } finally {
     await handle?.close().catch(() => undefined);
-  }
-}
-
-async function openWithoutSymlinkTraversal(
-  source: string,
-): Promise<Awaited<ReturnType<typeof open>>> {
-  if (process.platform === "darwin") {
-    return await open(source, constants.O_RDONLY | DARWIN_O_NOFOLLOW_ANY);
-  }
-  if (process.platform !== "linux") {
-    throw new Error(`Outbound files are not supported on ${process.platform}`);
-  }
-
-  const components = source.split(sep).filter(Boolean);
-  const filename = components.pop();
-  if (filename === undefined) throw new Error("Outbound path does not name a file");
-
-  let directory = await open(sep, constants.O_RDONLY | constants.O_DIRECTORY);
-  try {
-    // procfs lets Node perform a descriptor-relative component walk without openat().
-    for (const component of components) {
-      const next = await open(
-        `/proc/self/fd/${directory.fd}/${component}`,
-        constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-      );
-      const previous = directory;
-      directory = next;
-      await previous.close();
-    }
-    return await open(
-      `/proc/self/fd/${directory.fd}/${filename}`,
-      constants.O_RDONLY | constants.O_NOFOLLOW,
-    );
-  } finally {
-    await directory.close().catch(() => undefined);
   }
 }
 

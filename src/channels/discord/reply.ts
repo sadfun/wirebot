@@ -12,8 +12,10 @@ import type {
   OutboundStream,
   SendOptions,
 } from "../../core/channel.js";
+import { errorMessage } from "../../shared/errors.js";
 import type { Logger } from "../../shared/logger.js";
-import { decodeBase64UrlJson, encodeBase64UrlJson, truncate } from "../../shared/text.js";
+import { truncate } from "../../shared/text.js";
+import { encodeCommandAction } from "../command-actions.js";
 import { DraftReplyStream } from "../draft-stream.js";
 import { splitMessageText } from "../progress.js";
 
@@ -242,28 +244,22 @@ export function choiceRows(
   );
 }
 
-export function decodeDiscordCommandId(
-  customId: string,
-): Readonly<{ name: string; args: string }> | undefined {
-  if (!customId.startsWith("wirebot_cmd:")) return undefined;
-  try {
-    const parsed = decodeBase64UrlJson(customId.slice("wirebot_cmd:".length));
-    if (typeof parsed !== "object" || parsed === null) return undefined;
-    const name = Reflect.get(parsed, "name");
-    const args = Reflect.get(parsed, "args");
-    if (typeof name !== "string" || !/^[a-z][a-z0-9_]*$/u.test(name)) return undefined;
-    if (typeof args !== "string") return undefined;
-    return { name, args };
-  } catch {
-    return undefined;
-  }
-}
-
 function commandRows(message: OutboundMessage, logger: Logger): DiscordActionRow[] {
   const buttons: ButtonBuilder[] = [];
   for (const action of message.actions ?? []) {
-    const customId = `wirebot_cmd:${encodeBase64UrlJson(action.command)}`;
-    if (customId.length > 100 || !/^[a-z][a-z0-9_]*$/u.test(action.command.name)) {
+    // One unencodable action must not take down the whole delivery. Discord
+    // caps a custom_id at 100 characters.
+    let customId: string;
+    try {
+      customId = encodeCommandAction(action.command.name, action.command.args);
+    } catch (error) {
+      logger.warn("Dropped a Discord command action", {
+        command: action.command.name,
+        error: errorMessage(error),
+      });
+      continue;
+    }
+    if (customId.length > 100) {
       logger.warn("Dropped a Discord command action", { command: action.command.name });
       continue;
     }

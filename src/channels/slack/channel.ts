@@ -6,22 +6,22 @@ import type { SlackConfig } from "../../config/env.js";
 import {
   botCommands,
   conversationScopedCommands,
-  instanceAdminCommands,
+  instanceAdminOnlyText,
 } from "../../core/bridge.js";
-import {
-  type DeliveryReceipt,
-  type InboundAttachment,
-  type InboundMessage,
-  type MessageHandler,
-  type MessagingChannel,
-  type OutboundMessage,
-  type ProviderReference,
-  registerChannelTraits,
+import type {
+  DeliveryReceipt,
+  InboundAttachment,
+  InboundMessage,
+  MessageHandler,
+  MessagingChannel,
+  OutboundMessage,
+  ProviderReference,
 } from "../../core/channel.js";
 import { trimInsertionOrdered, trimInsertionOrderedMap } from "../../shared/collections.js";
 import { errorMessage } from "../../shared/errors.js";
 import type { Logger } from "../../shared/logger.js";
 import { PendingChoices } from "../choices.js";
+import { decodeCommandAction } from "../command-actions.js";
 import { isWorkspaceMember } from "./authorization.js";
 import { type CodexConfigAccess, SlackConfigUi, slackConfigActionPrefix } from "./config-ui.js";
 import { downloadSlackFile, SlackFileDownloadError } from "./file.js";
@@ -42,7 +42,6 @@ import {
 } from "./references.js";
 import {
   choicePromptText,
-  decodeSlackCommandValue,
   publishSlackMessage,
   type SlackBlock,
   type SlackChoiceRequester,
@@ -157,10 +156,6 @@ export class SlackChannel implements MessagingChannel {
     this.#adminUserIds = config.adminUserIds;
     this.#attachmentDirectory = attachmentDirectory;
     this.#logger = logger;
-    registerChannelTraits(this.name, {
-      commandText: (command) => `/wirebot ${command}`,
-      supportsFileDelivery: true,
-    });
     this.#web = new WebClient(config.botToken, { logLevel: LogLevel.ERROR });
     this.#socket = new SocketModeClient({ appToken: config.appToken, logLevel: LogLevel.ERROR });
     this.#api = webMessagingApi(this.#web);
@@ -242,13 +237,12 @@ export class SlackChannel implements MessagingChannel {
       chars: inbound.text.length,
       attachments: inbound.attachments.length,
     });
-    if (command !== undefined && instanceAdminCommands.has(command.name) && !this.isAdmin(userId)) {
-      await inbound.responder.sendText(
-        "This command changes Wirebot for everyone using it and is limited to its admins.",
-      );
-      return;
-    }
     if (command?.name === "config" && this.#configUi !== undefined) {
+      // The bridge never sees this command, so its admin gate cannot apply here.
+      if (!inbound.isAdmin) {
+        await inbound.responder.sendText(instanceAdminOnlyText);
+        return;
+      }
       if (!inbound.address.isPrivate) {
         await inbound.responder.sendText("Open Codex settings in a direct message with the bot.");
         return;
@@ -444,6 +438,7 @@ export class SlackChannel implements MessagingChannel {
       },
       text: contextualText,
       attachments,
+      isAdmin: this.isAdmin(sender),
       responder,
       ...(normalized.files.length === 0
         ? {}
@@ -581,6 +576,7 @@ export class SlackChannel implements MessagingChannel {
       text: `/${command.name}${command.args.length === 0 ? "" : ` ${command.args}`}`,
       command,
       attachments: [],
+      isAdmin: this.isAdmin(userId),
       responder,
     };
     try {
@@ -668,7 +664,7 @@ export class SlackChannel implements MessagingChannel {
     channelId: string | undefined,
   ): Promise<void> {
     const handler = this.#handler;
-    const command = decodeSlackCommandValue(action.value ?? "");
+    const command = decodeCommandAction(action.value ?? "");
     const messageTs = payload.message?.ts;
     if (handler === undefined || command === undefined || channelId === undefined) return;
     if (messageTs === undefined) return;
@@ -708,6 +704,7 @@ export class SlackChannel implements MessagingChannel {
       text: `/${command.name}${command.args.length === 0 ? "" : ` ${command.args}`}`,
       command,
       attachments: [],
+      isAdmin: this.isAdmin(userId),
       responder,
     };
     try {

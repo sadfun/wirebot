@@ -24,7 +24,6 @@ interface DownloadOptions {
   readonly botToken: string;
   readonly directory: string;
   readonly index: number;
-  readonly fetch?: typeof globalThis.fetch;
 }
 
 export async function downloadTelegramFile(
@@ -61,7 +60,7 @@ export async function downloadTelegramFile(
   const url = `${options.apiRoot}/file/bot${options.botToken}/${encodeFilePath(file.file_path)}`;
   let response: Response;
   try {
-    response = await (options.fetch ?? globalThis.fetch)(url);
+    response = await fetch(url);
   } catch {
     throw new TelegramFileDownloadError(
       `The download request for ${reference.description} failed`,

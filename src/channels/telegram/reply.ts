@@ -13,11 +13,12 @@ import type {
 import { errorMessage } from "../../shared/errors.js";
 import type { Logger } from "../../shared/logger.js";
 import { truncate } from "../../shared/text.js";
+import { encodeCommandAction } from "../command-actions.js";
+import { CompletionGuard } from "../completion-guard.js";
+import { DraftThrottle } from "../draft-throttle.js";
 import { formatThinkingBlock, splitMessageText } from "../progress.js";
 import { safeFileName } from "./message.js";
 import type { TelegramReplyRoute } from "./route.js";
-
-export { formatThinkingBlock };
 
 export type ChoiceRequester = (
   chat: Chat,
@@ -74,32 +75,34 @@ function keyboard(options: SendOptions | undefined): InlineKeyboardMarkup | unde
   };
 }
 
-function commandKeyboard(message: OutboundMessage): InlineKeyboardMarkup | undefined {
+function commandKeyboard(
+  message: OutboundMessage,
+  logger: Logger,
+): InlineKeyboardMarkup | undefined {
   const actions = message.actions;
   if (actions === undefined || actions.length === 0) return undefined;
-  return {
-    inline_keyboard: actions.map((action) => [
-      {
-        text: action.label.slice(0, 64),
-        callback_data: encodeCommandCallback(action.command.name, action.command.args),
-      },
-    ]),
-  };
-}
-
-export function decodeCommandCallback(
-  value: string,
-): Readonly<{ name: string; args: string }> | undefined {
-  const match = /^tx:([a-z][a-z0-9_]*):(.*)$/u.exec(value);
-  const name = match?.[1];
-  const args = match?.[2];
-  return name === undefined || args === undefined ? undefined : { name, args };
-}
-
-function encodeCommandCallback(name: string, args: string): string {
   // The only producer is the scheduled-run notification ("continue" plus a
   // UUID, ~48 bytes), comfortably inside Telegram's 64-byte callback-data cap.
-  return `tx:${name}:${args}`;
+  const rows = actions.flatMap((action) => {
+    try {
+      return [
+        [
+          {
+            text: action.label.slice(0, 64),
+            callback_data: encodeCommandAction(action.command.name, action.command.args),
+          },
+        ],
+      ];
+    } catch (error) {
+      logger.warn("Dropped a Telegram command action", {
+        command: action.command.name,
+        error: errorMessage(error),
+      });
+      return [];
+    }
+  });
+  if (rows.length === 0) return undefined;
+  return { inline_keyboard: rows };
 }
 
 /**
@@ -120,7 +123,7 @@ export async function publishTelegramMessage(
       chatId,
       route,
       message.text,
-      commandKeyboard(message),
+      commandKeyboard(message, logger),
       logger,
     );
     messageIds.push(...textIds);
@@ -325,96 +328,12 @@ export class TelegramGuestResponder implements MessageResponder {
   }
 }
 
-/**
- * Coalesces streaming updates into at most one in-flight flush per interval:
- * `schedule` marks the latest content dirty, and the flush callback runs once
- * the interval elapses and any previous flush has settled.
- */
-class DraftThrottle {
-  readonly #intervalMs: number;
-  readonly #flush: () => Promise<void>;
-  readonly #onError: ((error: unknown) => void) | undefined;
-  readonly #immediateAfterFlush: () => boolean;
-  #lastFlushAt = 0;
-  #dirty = false;
-  #timer: NodeJS.Timeout | undefined;
-  #inFlight: Promise<void> | undefined;
-
-  public constructor(
-    intervalMs: number,
-    flush: () => Promise<void>,
-    options: {
-      readonly onError?: (error: unknown) => void;
-      /** Whether a pending update may skip the interval once a flush settles. */
-      readonly immediateAfterFlush?: () => boolean;
-    } = {},
-  ) {
-    this.#intervalMs = intervalMs;
-    this.#flush = flush;
-    this.#onError = options.onError;
-    this.#immediateAfterFlush = options.immediateAfterFlush ?? ((): boolean => false);
-  }
-
-  public get dirty(): boolean {
-    return this.#dirty;
-  }
-
-  public markDirty(): void {
-    this.#dirty = true;
-  }
-
-  /** Record an out-of-band publish so the next flush waits a full interval. */
-  public touch(): void {
-    this.#lastFlushAt = Date.now();
-  }
-
-  public schedule(immediate = false): void {
-    this.#dirty = true;
-    if (this.#inFlight !== undefined) return;
-    const wait = immediate ? 0 : Math.max(0, this.#intervalMs - (Date.now() - this.#lastFlushAt));
-    if (wait === 0) {
-      this.startFlush();
-      return;
-    }
-    if (this.#timer !== undefined) return;
-    this.#timer = setTimeout(() => {
-      this.#timer = undefined;
-      this.startFlush();
-    }, wait);
-    this.#timer.unref();
-  }
-
-  public clear(): void {
-    if (this.#timer !== undefined) clearTimeout(this.#timer);
-    this.#timer = undefined;
-    this.#dirty = false;
-  }
-
-  public async settle(): Promise<void> {
-    await this.#inFlight?.catch(() => undefined);
-  }
-
-  private startFlush(): void {
-    if (this.#inFlight !== undefined || !this.#dirty) return;
-    this.#dirty = false;
-    this.#lastFlushAt = Date.now();
-    const update = this.#flush().catch((error: unknown) => this.#onError?.(error));
-    this.#inFlight = update;
-    void update.finally(() => {
-      if (this.#inFlight === update) this.#inFlight = undefined;
-      if (this.#dirty) this.schedule(this.#immediateAfterFlush());
-    });
-  }
-}
-
 class TelegramGuestReplyStream implements OutboundStream {
   #progress: ProgressSnapshot = { actions: [], plan: [] };
   #finalText = "";
   #inlineMessageId: string | undefined;
   #lastPublishedText = "";
-  #closing = false;
-  #completing: Promise<void> | undefined;
-  #completed = false;
+  readonly #lifecycle = new CompletionGuard();
   readonly #responder: TelegramGuestResponder;
   readonly #throttle = new DraftThrottle(1_000, async () => await this.flushDraft());
 
@@ -423,7 +342,7 @@ class TelegramGuestReplyStream implements OutboundStream {
   }
 
   public async start(initialProgress?: ProgressSnapshot): Promise<void> {
-    if (this.#closing || this.#completed || this.#inlineMessageId !== undefined) return;
+    if (this.#lifecycle.closed || this.#inlineMessageId !== undefined) return;
     if (initialProgress !== undefined) this.#progress = initialProgress;
     const preview = this.preview();
     const answer = await this.#responder.answer(preview);
@@ -434,13 +353,13 @@ class TelegramGuestReplyStream implements OutboundStream {
   }
 
   public setProgress(progress: ProgressSnapshot): void {
-    if (this.#closing || this.#completed) return;
+    if (this.#lifecycle.closed) return;
     this.#progress = progress;
     this.scheduleDraft();
   }
 
   public appendFinal(delta: string): void {
-    if (this.#closing || this.#completed) return;
+    if (this.#lifecycle.closed) return;
     this.#finalText += delta;
     this.scheduleDraft();
   }
@@ -449,19 +368,7 @@ class TelegramGuestReplyStream implements OutboundStream {
     text: string,
     attachments: readonly OutboundAttachment[] = [],
   ): Promise<void> {
-    if (this.#completed) return;
-    if (this.#completing !== undefined) return await this.#completing;
-
-    this.#closing = true;
-    const completion = this.finish(text, attachments);
-    this.#completing = completion;
-    try {
-      await completion;
-      this.#completed = true;
-    } finally {
-      if (this.#completing === completion) this.#completing = undefined;
-      if (!this.#completed) this.#closing = false;
-    }
+    await this.#lifecycle.run(async () => await this.finish(text, attachments));
   }
 
   public async fail(message: string): Promise<void> {
@@ -490,7 +397,7 @@ class TelegramGuestReplyStream implements OutboundStream {
   }
 
   private scheduleDraft(immediate = false): void {
-    if (this.#closing || this.#completed) return;
+    if (this.#lifecycle.closed) return;
     if (this.#inlineMessageId === undefined) {
       // No inline message yet; start() re-schedules once the query is answered.
       this.#throttle.markDirty();
@@ -501,7 +408,7 @@ class TelegramGuestReplyStream implements OutboundStream {
 
   private async flushDraft(): Promise<void> {
     const inlineMessageId = this.#inlineMessageId;
-    if (this.#closing || this.#completed || inlineMessageId === undefined) return;
+    if (this.#lifecycle.closed || inlineMessageId === undefined) return;
     const preview = this.preview();
     if (preview === this.#lastPublishedText) return;
     this.#lastPublishedText = await this.#responder.edit(inlineMessageId, preview);
@@ -523,7 +430,7 @@ class TelegramReplyStream implements OutboundStream {
   #draftMode: "rich" | "plain" | "none";
   #hasPublishedContent = false;
   #typingTimer: NodeJS.Timeout | undefined;
-  #completed = false;
+  readonly #lifecycle = new CompletionGuard();
   readonly #api: Api;
   readonly #chat: Chat;
   readonly #route: TelegramReplyRoute;
@@ -570,20 +477,26 @@ class TelegramReplyStream implements OutboundStream {
     text: string,
     attachments: readonly OutboundAttachment[] = [],
   ): Promise<void> {
-    if (this.#completed) return;
-    this.#completed = true;
-    this.clearTimers();
-    await this.#throttle.settle();
-    if (text.length > 0) {
-      try {
-        await sendFinalText(this.#api, this.#chat.id, this.#route, text, undefined, this.#logger);
-      } catch (error) {
-        this.#logger.warn("Telegram final text delivery failed", {
-          error: errorMessage(error),
-        });
+    await this.#lifecycle.run(async () => {
+      this.clearTimers();
+      await this.#throttle.settle();
+      if (text.length > 0) {
+        try {
+          await sendFinalText(this.#api, this.#chat.id, this.#route, text, undefined, this.#logger);
+        } catch (error) {
+          this.#logger.warn("Telegram final text delivery failed", {
+            error: errorMessage(error),
+          });
+        }
       }
-    }
-    await sendTelegramAttachments(this.#api, this.#chat.id, this.#route, attachments, this.#logger);
+      await sendTelegramAttachments(
+        this.#api,
+        this.#chat.id,
+        this.#route,
+        attachments,
+        this.#logger,
+      );
+    });
   }
 
   public async fail(message: string): Promise<void> {
@@ -591,12 +504,12 @@ class TelegramReplyStream implements OutboundStream {
   }
 
   private scheduleDraft(immediate = false): void {
-    if (this.#completed || this.#draftMode === "none") return;
+    if (this.#lifecycle.closed || this.#draftMode === "none") return;
     this.#throttle.schedule(immediate);
   }
 
   private async flushDraft(): Promise<void> {
-    if (this.#completed || this.#draftMode === "none") return;
+    if (this.#lifecycle.closed || this.#draftMode === "none") return;
     if (this.#draftMode === "rich") {
       const richMessage: InputRichMessageWithoutUpload = {
         blocks: [

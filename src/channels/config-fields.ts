@@ -103,6 +103,74 @@ export function fieldOptions(
   }
 }
 
+export interface ConfigFieldLine {
+  readonly key: ConfigFieldKey;
+  readonly label: string;
+  readonly value: string;
+}
+
+/** Channel-neutral overview screen; connectors add their own markup. */
+export interface ConfigOverviewModel {
+  readonly title: string;
+  readonly status?: string;
+  readonly fields: readonly ConfigFieldLine[];
+  readonly warnings: readonly string[];
+  readonly footer: string;
+}
+
+export function overviewModel(
+  snapshot: EditableConfigSnapshot,
+  status?: string,
+): ConfigOverviewModel {
+  return {
+    title: "Codex settings",
+    ...(status === undefined ? {} : { status }),
+    fields: configFieldKeys.map((key) => ({
+      key,
+      label: fieldLabels[key],
+      value: displayValue(snapshot, key),
+    })),
+    warnings: snapshot.validation.issues
+      .map((issue) => `⚠️ ${issue.path}: ${issue.message}`)
+      .slice(0, 3),
+    footer: "Everyone using this Wirebot shares these settings.",
+  };
+}
+
+export interface ConfigPickerOption {
+  /** Display label; the currently selected option carries a "✓ " prefix. */
+  readonly label: string;
+  /** Value for `applyConfigValue`: `defaultOptionValue` or URI-encoded. */
+  readonly encodedValue: string;
+}
+
+/** Channel-neutral picker screen for one field; connectors add a Back control. */
+export interface ConfigPickerModel {
+  readonly field: ConfigFieldKey;
+  readonly label: string;
+  readonly currentValue: string;
+  readonly note?: string;
+  readonly options: readonly ConfigPickerOption[];
+}
+
+export function pickerModel(
+  snapshot: EditableConfigSnapshot,
+  field: ConfigFieldKey,
+): ConfigPickerModel {
+  const note = fieldNotes[field];
+  const current = snapshot.values[field];
+  return {
+    field,
+    label: fieldLabels[field],
+    currentValue: displayValue(snapshot, field),
+    ...(note === undefined ? {} : { note }),
+    options: fieldOptions(snapshot, field).map((option) => ({
+      label: `${option.value === current ? "✓ " : ""}${option.label}`,
+      encodedValue: option.value === null ? defaultOptionValue : encodeURIComponent(option.value),
+    })),
+  };
+}
+
 /** Apply a picker selection through CodexConfigService and describe the outcome. */
 export async function applyConfigValue(
   config: CodexConfigAccess,

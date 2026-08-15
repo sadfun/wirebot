@@ -1,6 +1,4 @@
-import * as SliderPrimitive from "@radix-ui/react-slider";
 import * as SwitchPrimitive from "@radix-ui/react-switch";
-import { cva } from "class-variance-authority";
 import { LoaderCircle } from "lucide-react";
 import {
   type ButtonHTMLAttributes,
@@ -12,27 +10,20 @@ import {
 } from "react";
 import { cn } from "./cn.js";
 
-const buttonVariants = cva(
-  "ui-button inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-semibold transition-[background,color,opacity,transform] outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-45 active:scale-[0.985]",
-  {
-    variants: {
-      mode: {
-        filled: "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
-        bezeled: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        plain: "bg-transparent text-primary hover:bg-primary/10",
-      },
-      size: {
-        s: "min-h-10 px-3",
-        m: "min-h-11 px-4",
-        l: "min-h-12 px-5 text-base",
-      },
-    },
-    defaultVariants: {
-      mode: "filled",
-      size: "m",
-    },
-  },
-);
+const buttonBaseClasses =
+  "ui-button inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-semibold transition-[background,color,opacity,transform] outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-45 active:scale-[0.985]";
+
+const buttonModeClasses = {
+  filled: "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
+  bezeled: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+  plain: "bg-transparent text-primary hover:bg-primary/10",
+} as const;
+
+const buttonSizeClasses = {
+  s: "min-h-10 px-3",
+  m: "min-h-11 px-4",
+  l: "min-h-12 px-5 text-base",
+} as const;
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   readonly mode?: "filled" | "bezeled" | "plain";
@@ -48,7 +39,13 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   return (
     <button
       ref={ref}
-      className={cn(buttonVariants({ mode, size }), stretched && "w-full", className)}
+      className={cn(
+        buttonBaseClasses,
+        buttonModeClasses[mode ?? "filled"],
+        buttonSizeClasses[size ?? "m"],
+        stretched && "w-full",
+        className,
+      )}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
       {...props}
@@ -241,44 +238,6 @@ export function Switch(props: SwitchProps): ReactElement {
     >
       <SwitchPrimitive.Thumb className="ui-switch-thumb pointer-events-none block size-6 rounded-full shadow-md transition-[background,transform] data-[state=checked]:translate-x-5 data-[state=unchecked]:translate-x-0" />
     </SwitchPrimitive.Root>
-  );
-}
-
-interface SliderProps {
-  readonly className?: string;
-  readonly min: number;
-  readonly max: number;
-  readonly step: number;
-  readonly value: number;
-  readonly disabled?: boolean;
-  readonly getAriaLabel?: () => string;
-  readonly getAriaValueText?: (value: number) => string;
-  readonly onValueChange: (value: number) => void;
-}
-
-export function Slider(props: SliderProps): ReactElement {
-  return (
-    <SliderPrimitive.Root
-      className={cn(
-        "relative flex w-full touch-none select-none items-center data-[disabled]:opacity-50",
-        props.className,
-      )}
-      min={props.min}
-      max={props.max}
-      step={props.step}
-      value={[props.value]}
-      disabled={props.disabled === true}
-      onValueChange={(value) => props.onValueChange(value[0] ?? props.value)}
-    >
-      <SliderPrimitive.Track className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-secondary">
-        <SliderPrimitive.Range className="absolute h-full bg-primary" />
-      </SliderPrimitive.Track>
-      <SliderPrimitive.Thumb
-        className="block size-5 rounded-full border-2 border-primary bg-background shadow-sm outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-        aria-label={props.getAriaLabel?.()}
-        aria-valuetext={props.getAriaValueText?.(props.value)}
-      />
-    </SliderPrimitive.Root>
   );
 }
 

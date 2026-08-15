@@ -2,6 +2,34 @@
 
 All notable changes to Wirebot are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Codex itself is now the config validator: the Mini App previews check structure only, and
+  semantic errors surface from the version-checked `config/batchWrite` at save time. The
+  hand-maintained mirror of Codex's config rules is gone, and the feature list comes entirely
+  from the app-server instead of a curated catalog.
+- Voice transcription is best-effort: any transcription failure now forwards the voice message
+  untranscribed with a notice instead of failing the turn.
+- Instance-admin command gating moved into the bridge, driven by a connector-computed
+  `isAdmin` flag, replacing per-connector enforcement.
+- Telegram now shares the connector-common pending-choice and draft-throttle machinery, and
+  all three connectors use one `tx:` command-button codec (Discord button payloads changed
+  format) and one shared config-UI screen model.
+- The settings Mini App client is split into focused modules with self-contained sections;
+  the reasoning-effort slider became a segmented control, dropping the
+  `@radix-ui/react-slider` and `class-variance-authority` dependencies.
+- `codex check --apply` installs protocol bindings in place and relies on git to restore a
+  failed upgrade; removals of app-server methods Wirebot never calls are informational
+  instead of blocking.
+
+### Removed
+
+- The pre-0.0.27 automation-state migration, the Telegram menu-button read-back verification,
+  the symlink-race-proof file open (workspace confinement and snapshotting remain), and
+  assorted unused code and injection seams left over from the removed test suites.
+
 ## [0.2.1] - 2026-08-07
 
 ### Fixed

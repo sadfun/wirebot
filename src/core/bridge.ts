@@ -83,6 +83,10 @@ export const instanceAdminCommands: ReadonlySet<string> = new Set([
   "restart",
 ]);
 
+/** Denial for instance-admin commands; connectors reuse it where they intercept /config. */
+export const instanceAdminOnlyText =
+  "This command changes Wirebot for everyone using it and is limited to its admins.";
+
 function helpText(channel: string): string {
   return [
     "Send me a message to work with Codex in this conversation.",
@@ -204,6 +208,10 @@ export class CodexBridge {
   }
 
   private async handleCommand(message: InboundMessage, command: InboundCommand): Promise<void> {
+    if (instanceAdminCommands.has(command.name) && !message.isAdmin) {
+      await message.responder.sendText(instanceAdminOnlyText);
+      return;
+    }
     switch (command.name) {
       case "start":
         await this.handleStart(message);

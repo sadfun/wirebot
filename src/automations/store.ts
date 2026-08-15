@@ -13,15 +13,12 @@ import {
   type ProviderReference,
 } from "./types.js";
 
-const storedStateSchema = z.preprocess(
-  migrateStoredState,
-  z.strictObject({
-    version: z.literal(1),
-    automations: z.record(z.string(), automationDefinitionSchema),
-    runs: z.record(z.string(), automationRunSchema),
-    notifications: z.record(z.string(), automationNotificationSchema),
-  }),
-);
+const storedStateSchema = z.strictObject({
+  version: z.literal(1),
+  automations: z.record(z.string(), automationDefinitionSchema),
+  runs: z.record(z.string(), automationRunSchema),
+  notifications: z.record(z.string(), automationNotificationSchema),
+});
 
 type StoredState = z.infer<typeof storedStateSchema>;
 const maximumRunsPerAutomation = 100;
@@ -293,63 +290,4 @@ function pruneAutomationHistory(draft: StoredState, automationId: string): void 
   for (const notification of notifications.slice(maximumNotificationsPerAutomation)) {
     delete draft.notifications[notification.id];
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/**
- * One-shot upgrade of pre-0.0.27 persisted state: `kind`/`execution` fold into
- * `threadId`, soft-delete tombstones disappear with their history, and retired
- * bookkeeping fields (`run.summary`, `notification.target`, "pending") drop.
- * Delete once no deployment predates 0.0.27.
- */
-function migrateStoredState(value: unknown): unknown {
-  if (!isRecord(value) || !isRecord(value.automations)) return value;
-  const automations: Record<string, unknown> = {};
-  const deleted = new Set<string>();
-  for (const [id, entry] of Object.entries(value.automations)) {
-    if (!isRecord(entry)) {
-      automations[id] = entry;
-      continue;
-    }
-    const { kind: _kind, execution, ...rest } = entry;
-    if (rest.status === "deleted") {
-      deleted.add(id);
-      continue;
-    }
-    if (rest.threadId === undefined) {
-      rest.threadId =
-        isRecord(execution) && typeof execution.threadId === "string" ? execution.threadId : null;
-    }
-    automations[id] = rest;
-  }
-  const runs: Record<string, unknown> = {};
-  for (const [id, entry] of Object.entries(isRecord(value.runs) ? value.runs : {})) {
-    if (!isRecord(entry)) {
-      runs[id] = entry;
-      continue;
-    }
-    if (deleted.has(String(entry.automationId))) continue;
-    const { summary: _summary, ...rest } = entry;
-    runs[id] = rest;
-  }
-  const notifications: Record<string, unknown> = {};
-  for (const [id, entry] of Object.entries(
-    isRecord(value.notifications) ? value.notifications : {},
-  )) {
-    if (!isRecord(entry)) {
-      notifications[id] = entry;
-      continue;
-    }
-    if (deleted.has(String(entry.automationId))) continue;
-    const { target: _target, ...rest } = entry;
-    if (rest.status === "pending") {
-      rest.status = "failed";
-      rest.error ??= "Wirebot restarted before notification delivery was confirmed.";
-    }
-    notifications[id] = rest;
-  }
-  return { ...value, automations, runs, notifications };
 }

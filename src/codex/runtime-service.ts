@@ -76,7 +76,6 @@ export interface CodexRuntimeServiceOptions {
 interface ReconcileOptions {
   readonly hotReloadConfig: boolean;
   readonly reloadMcp: boolean;
-  readonly forceSkills: boolean;
   readonly freshServer: boolean;
 }
 
@@ -126,7 +125,6 @@ export class CodexRuntimeService {
       return await this.reconcile({
         hotReloadConfig: false,
         reloadMcp: false,
-        forceSkills: true,
         freshServer: true,
       });
     });
@@ -207,7 +205,6 @@ export class CodexRuntimeService {
       return await this.reconcile({
         hotReloadConfig: true,
         reloadMcp: true,
-        forceSkills: true,
         freshServer: false,
       });
     });
@@ -219,7 +216,6 @@ export class CodexRuntimeService {
       return await this.reconcile({
         hotReloadConfig: false,
         reloadMcp: true,
-        forceSkills: true,
         freshServer: false,
       });
     });
@@ -253,7 +249,6 @@ export class CodexRuntimeService {
         return await this.reconcile({
           hotReloadConfig: false,
           reloadMcp: false,
-          forceSkills: true,
           freshServer: true,
         });
       } catch (error) {
@@ -314,10 +309,8 @@ export class CodexRuntimeService {
       }
     }
 
-    if (options.forceSkills) {
-      const skillError = await this.refreshSkills();
-      if (skillError !== undefined) errors.push(skillError);
-    }
+    const skillError = await this.refreshSkills();
+    if (skillError !== undefined) errors.push(skillError);
 
     this.updateStatus({
       state: errors.length === 0 ? "ready" : "degraded",

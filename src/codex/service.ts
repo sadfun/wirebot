@@ -119,7 +119,6 @@ type CodexThreadSettings = Readonly<
     | "approvalPolicy"
     | "approvalsReviewer"
     | "sandbox"
-    | "config"
     | "baseInstructions"
     | "developerInstructions"
     | "personality"
@@ -161,9 +160,6 @@ export interface CodexServiceProviders {
   readonly externalAuthTokens?: (
     request: ChatgptAuthTokensRefreshParams,
   ) => Promise<ChatgptAuthTokensRefreshResponse>;
-  readonly now?: () => number;
-  /** Passive lifecycle observer for test harnesses. */
-  readonly onTurnStarting?: (threadId: string, conversationKey: string) => void;
 }
 
 export class CodexService {
@@ -174,7 +170,7 @@ export class CodexService {
   readonly #dynamicTools = new Map<string, CodexDynamicTool>();
   readonly #foregroundWaiting = new Map<string, number>();
   readonly #lastForegroundAt = new Map<string, number>();
-  readonly #loginListeners = new Set<LoginCompletedListener>();
+  #loginListener: LoginCompletedListener | undefined;
   readonly #rpc: CodexAppServer;
   readonly #conversations: ConversationStore;
   readonly #workspace: string;
@@ -186,8 +182,6 @@ export class CodexService {
   readonly #explicitSkillInputs: ExplicitSkillInputProvider;
   readonly #environmentContext: ApplicationContext | undefined;
   readonly #externalAuthTokens: CodexServiceProviders["externalAuthTokens"];
-  readonly #now: () => number;
-  readonly #onTurnStarting: CodexServiceProviders["onTurnStarting"];
   #pauseGate: Deferred<void> | undefined;
   #idleGate: Deferred<void> | undefined;
   #interruptingScheduledTurns = false;
@@ -221,8 +215,6 @@ export class CodexService {
     this.#explicitSkillInputs = providers.explicitSkillInputs ?? (() => []);
     this.#environmentContext = providers.environmentContext;
     this.#externalAuthTokens = providers.externalAuthTokens;
-    this.#now = providers.now ?? Date.now;
-    this.#onTurnStarting = providers.onTurnStarting;
     rpc.onNotification((notification) => this.handleNotification(notification));
     rpc.onExit((exit) => this.handleTransportExit(exit.error));
     rpc.setServerRequestHandler(async (request) => await this.handleServerRequest(request));
@@ -253,7 +245,7 @@ export class CodexService {
   }
 
   public tryAcquireBackground(conversationKey: string): BackgroundLeaseDecision {
-    const now = this.#now();
+    const now = Date.now();
     const retryAt = new Date(now + CodexService.#backgroundQuietPeriodMs);
     if ((this.#foregroundWaiting.get(conversationKey) ?? 0) > 0) {
       return { acquired: false, reason: "A user message is waiting.", retryAt };
@@ -367,7 +359,7 @@ export class CodexService {
           // Once a turn started, its session owns the stream, including failure.
           if (!started) await stream.fail(errorMessage(error));
         } finally {
-          this.#lastForegroundAt.set(conversationKey, this.#now());
+          this.#lastForegroundAt.set(conversationKey, Date.now());
           this.leaveJob();
         }
       });
@@ -458,7 +450,6 @@ export class CodexService {
     session: ThreadSession,
     request: StartTurnRequest,
   ): Promise<FinalizedTurn> {
-    this.#onTurnStarting?.(session.threadId, request.conversationKey);
     const additionalContext = this.additionalContext(request.connector, request.invocation);
     const pending = session.expectTurn(request);
     let response: TurnStartResponse;
@@ -493,7 +484,6 @@ export class CodexService {
     session: ThreadSession,
     request: StartCompactionRequest,
   ): Promise<FinalizedTurn> {
-    this.#onTurnStarting?.(session.threadId, request.conversationKey);
     const pending = session.expectTurn(request);
     try {
       await this.#rpc.request<ThreadCompactStartResponse>({
@@ -524,15 +514,15 @@ export class CodexService {
         attachments.map(async (attachment) => await transcriber.transcribe(attachment.path)),
       );
     } catch (error) {
-      // A deployment without the transcription transport forwards the voice
-      // message untranscribed; other failures (auth, HTTP) surface to the user.
-      if (!(error instanceof BridgeError) || error.code !== "TRANSCRIPTION_UNAVAILABLE") {
-        throw error;
-      }
-      this.#logger.info(
-        "Voice transcription is unavailable; forwarding the voice message untranscribed",
-      );
-      return text;
+      // Transcription is best-effort: every failure (missing transport, auth,
+      // HTTP) degrades to forwarding the voice message untranscribed instead
+      // of failing the user's turn.
+      this.#logger.warn("Voice transcription failed; forwarding the voice message untranscribed", {
+        error: errorMessage(error),
+      });
+      const notice =
+        "Note: voice transcription is unavailable, so the voice message is forwarded untranscribed as an audio file.";
+      return [text.trim(), notice].filter((part) => part.length > 0).join("\n\n");
     }
     const base = syntheticText ? "" : text.trim();
     const blocks = transcripts.map((transcript, index) => {
@@ -614,7 +604,7 @@ export class CodexService {
         }
         return true;
       } finally {
-        this.#lastForegroundAt.set(conversationKey, this.#now());
+        this.#lastForegroundAt.set(conversationKey, Date.now());
         this.leaveJob();
       }
     } finally {
@@ -718,7 +708,7 @@ export class CodexService {
   }
 
   public onLoginCompleted(listener: LoginCompletedListener): void {
-    this.#loginListeners.add(listener);
+    this.#loginListener = listener;
   }
 
   private async ensureThread(
@@ -880,12 +870,10 @@ export class CodexService {
       success: notification.success,
       error: notification.error,
     });
-    for (const listener of this.#loginListeners) {
-      try {
-        listener(notification);
-      } catch (error) {
-        this.#logger.error("Login completion listener failed", error);
-      }
+    try {
+      this.#loginListener?.(notification);
+    } catch (error) {
+      this.#logger.error("Login completion listener failed", error);
     }
   }
 

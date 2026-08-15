@@ -209,7 +209,7 @@ protected on back navigation, tab changes, browser unload, and Telegram Mini App
 
 The settings tab includes a default-on remote session context toggle and covers the everyday settings from Codex's [basic configuration guide](https://learn.chatgpt.com/docs/config-file/config-basic), including models, reasoning, approval policy, permission profiles, sandboxing, web search, shell environment, and supported feature flags. Turning remote session context off stops Wirebot from adding its connector-aware instructions to Codex turns.
 
-Choices come from the running app-server and active configuration layers instead of a handwritten catalog. Every edit is previewed by the same server-side validator used for saves. A save is a version-checked `config/batchWrite`, so all changes either pass Codex validation and land together or leave `config.toml` untouched. The app-server runs with `--strict-config`, so unknown configuration keys fail loudly.
+Choices come from the running app-server and active configuration layers instead of a handwritten catalog. Codex itself is the validator: a save is a version-checked `config/batchWrite`, so all changes either pass Codex validation and land together or leave `config.toml` untouched. The app-server runs with `--strict-config`, so unknown configuration keys fail loudly.
 
 Wirebot keeps the running Codex process synchronized using the [app-server mechanisms designed for this purpose](https://learn.chatgpt.com/docs/app-server#api-overview):
 

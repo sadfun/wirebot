@@ -22,9 +22,10 @@ import type {
   OutboundMessage,
   ProviderReference,
 } from "../../core/channel.js";
-import { type Deferred, deferred } from "../../shared/async.js";
 import { errorMessage } from "../../shared/errors.js";
 import type { Logger } from "../../shared/logger.js";
+import { PendingChoices } from "../choices.js";
+import { decodeCommandAction } from "../command-actions.js";
 import { downloadTelegramFile, TelegramFileDownloadError } from "./file.js";
 import {
   describeTelegramFile,
@@ -39,7 +40,6 @@ import {
 } from "./references.js";
 import {
   type ChoiceRequester,
-  decodeCommandCallback,
   publishTelegramMessage,
   TelegramGuestResponder,
   TelegramResponder,
@@ -52,11 +52,7 @@ import {
   type TelegramReplyRoute,
 } from "./route.js";
 
-interface PendingChoice {
-  readonly userId: number;
-  readonly options: readonly ChoiceOption[];
-  readonly result: Deferred<string>;
-  readonly timer: NodeJS.Timeout;
+interface TelegramChoiceContext {
   readonly chatId: number;
   readonly messageId: number;
 }
@@ -74,11 +70,6 @@ const telegramBotCommands: readonly BotCommand[] = botCommands.map((entry) => ({
   description: entry.menuDescription,
 }));
 
-export interface TelegramChannelOptions {
-  /** Narrow test-harness exception; ordinary bot senders remain denied by default. */
-  readonly allowedBotUserIds?: ReadonlySet<number>;
-}
-
 function telegramMenuButton(miniAppUrl: string | undefined): MenuButton {
   if (miniAppUrl === undefined) {
     return { type: "commands" };
@@ -90,15 +81,9 @@ function telegramMenuButton(miniAppUrl: string | undefined): MenuButton {
   };
 }
 
-type TelegramMenuButtonApi = Pick<Api, "getChatMenuButton" | "setChatMenuButton">;
+type TelegramMenuButtonApi = Pick<Api, "setChatMenuButton">;
 
-function menuButtonsMatch(actual: MenuButton, expected: MenuButton): boolean {
-  if (actual.type !== expected.type) return false;
-  if (actual.type !== "web_app" || expected.type !== "web_app") return true;
-  return actual.text === expected.text && actual.web_app.url === expected.web_app.url;
-}
-
-async function reconcileTelegramMenuButton(
+async function registerTelegramMenuButton(
   api: TelegramMenuButtonApi,
   allowedUserIds: ReadonlySet<number>,
   miniAppUrl: string | undefined,
@@ -116,16 +101,6 @@ async function reconcileTelegramMenuButton(
         : { chat_id: chatId, menu_button: menuButton };
     try {
       await api.setChatMenuButton(parameters);
-      const actual = await api.getChatMenuButton(chatId === undefined ? {} : { chat_id: chatId });
-      if (!menuButtonsMatch(actual, menuButton)) {
-        logger.warn("Telegram returned an unexpected menu button after registration", {
-          scope: chatId === undefined ? "default" : "private-chat",
-          ...(chatId === undefined ? {} : { chatId }),
-          expectedType: menuButton.type,
-          actualType: actual.type,
-        });
-        continue;
-      }
       configuredScopes += 1;
     } catch (error) {
       logger.warn("Could not register the Telegram Mini App menu button", {
@@ -136,7 +111,7 @@ async function reconcileTelegramMenuButton(
     }
   }
 
-  logger.info("Telegram menu button registration reconciled", {
+  logger.info("Telegram menu button registered", {
     miniAppEnabled: miniAppUrl !== undefined,
     configuredScopes,
     totalScopes: scopes.length,
@@ -153,8 +128,9 @@ export class TelegramChannel implements MessagingChannel {
   readonly #attachmentDirectory: string;
   readonly #logger: Logger;
   readonly #miniAppUrl: string | undefined;
-  readonly #allowedBotUserIds: ReadonlySet<number>;
-  readonly #pendingChoices = new Map<string, PendingChoice>();
+  readonly #pendingChoices = new PendingChoices<TelegramChoiceContext>(async (entry) => {
+    await this.clearChoiceKeyboard(this.#bot.api, entry.context);
+  });
   #handler: MessageHandler | undefined;
   #runner: RunnerHandle | undefined;
   #botUsername: string | undefined;
@@ -168,7 +144,6 @@ export class TelegramChannel implements MessagingChannel {
     attachmentDirectory: string,
     logger: Logger,
     miniAppUrl?: string,
-    options: TelegramChannelOptions = {},
   ) {
     this.#token = token;
     this.#apiRoot = apiRoot;
@@ -177,7 +152,6 @@ export class TelegramChannel implements MessagingChannel {
     this.#attachmentDirectory = attachmentDirectory;
     this.#logger = logger;
     this.#miniAppUrl = miniAppUrl;
-    this.#allowedBotUserIds = options.allowedBotUserIds ?? new Set();
     this.#bot = new Bot(token, { client: { apiRoot } });
     this.#bot.on("message", async (context) => {
       await this.handleMessage(context.message, false, context.api);
@@ -216,7 +190,7 @@ export class TelegramChannel implements MessagingChannel {
     await this.#bot.api.setMyCommands(telegramBotCommands).catch((error: unknown) => {
       this.#logger.warn("Could not register Telegram commands", { error: errorMessage(error) });
     });
-    await reconcileTelegramMenuButton(
+    await registerTelegramMenuButton(
       this.#bot.api,
       this.#allowedUserIds,
       this.#miniAppUrl,
@@ -244,11 +218,7 @@ export class TelegramChannel implements MessagingChannel {
 
   public async stop(): Promise<void> {
     await this.#runner?.stop();
-    for (const choice of this.#pendingChoices.values()) {
-      clearTimeout(choice.timer);
-      choice.result.resolve("decline");
-    }
-    this.#pendingChoices.clear();
+    await this.#pendingChoices.declineAll("Request cancelled");
   }
 
   public async publish(
@@ -280,7 +250,7 @@ export class TelegramChannel implements MessagingChannel {
     const sender = message.from;
     const handler = this.#handler;
     if (sender === undefined || handler === undefined) return;
-    if (sender.is_bot && !this.#allowedBotUserIds.has(sender.id)) {
+    if (sender.is_bot) {
       this.#logger.debug("Ignored Telegram message from bot sender", { userId: sender.id });
       return;
     }
@@ -370,6 +340,8 @@ export class TelegramChannel implements MessagingChannel {
         syntheticText,
         ...(command === undefined ? {} : { command }),
         attachments,
+        // Every allowlisted Telegram user is an instance admin.
+        isAdmin: true,
         responder,
       });
       return;
@@ -424,6 +396,8 @@ export class TelegramChannel implements MessagingChannel {
       syntheticText: content.syntheticText === true,
       ...(content.command === undefined ? {} : { command: content.command }),
       attachments: content.attachments,
+      // Every allowlisted Telegram user is an instance admin.
+      isAdmin: true,
       responder,
     });
   }
@@ -449,64 +423,34 @@ export class TelegramChannel implements MessagingChannel {
     options: readonly ChoiceOption[],
     signal?: AbortSignal,
   ): Promise<string> => {
-    if (options.length === 0 || signal?.aborted === true) return "decline";
-    const token = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
-    const details = options
-      .filter((option) => option.description !== undefined)
-      .map((option) => `${option.label}: ${option.description}`)
-      .join("\n");
-    const body = details.length === 0 ? prompt : `${prompt}\n\n${details}`;
-    const sent = await this.#bot.api.sendMessage(
-      chat.id,
-      body.length <= 4_096 ? body : `${body.slice(0, 4_095)}…`,
-      {
-        ...telegramSendParameters(route),
-        reply_markup: {
-          inline_keyboard: options.map((option, index) => [
-            {
-              text: option.label.slice(0, 64),
-              callback_data: `cb:${token}:${index}`,
-            },
-          ]),
+    return await this.#pendingChoices.request(String(userId), options, signal, async (token) => {
+      const details = options
+        .filter((option) => option.description !== undefined)
+        .map((option) => `${option.label}: ${option.description}`)
+        .join("\n");
+      const body = details.length === 0 ? prompt : `${prompt}\n\n${details}`;
+      const sent = await this.#bot.api.sendMessage(
+        chat.id,
+        body.length <= 4_096 ? body : `${body.slice(0, 4_095)}…`,
+        {
+          ...telegramSendParameters(route),
+          reply_markup: {
+            inline_keyboard: options.map((option, index) => [
+              {
+                text: option.label.slice(0, 64),
+                callback_data: `cb:${token}:${index}`,
+              },
+            ]),
+          },
         },
-      },
-    );
-    const result = deferred<string>();
-    const timer = setTimeout(
-      () => {
-        this.#pendingChoices.delete(token);
-        result.resolve("decline");
-      },
-      5 * 60 * 1_000,
-    );
-    timer.unref();
-    this.#pendingChoices.set(token, {
-      userId,
-      options,
-      result,
-      timer,
-      chatId: chat.id,
-      messageId: sent.message_id,
+      );
+      return { chatId: chat.id, messageId: sent.message_id };
     });
-    const onAbort = (): void => {
-      const pending = this.#pendingChoices.get(token);
-      if (pending === undefined) return;
-      clearTimeout(pending.timer);
-      this.#pendingChoices.delete(token);
-      pending.result.resolve("decline");
-      void this.clearChoiceKeyboard(this.#bot.api, pending).catch(() => undefined);
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    try {
-      return await result.promise;
-    } finally {
-      signal?.removeEventListener("abort", onAbort);
-    }
   };
 
   private async handleCallback(query: CallbackQuery, api: Api): Promise<void> {
     if (!this.#allowedUserIds.has(query.from.id) || query.data === undefined) return;
-    const command = decodeCommandCallback(query.data);
+    const command = decodeCommandAction(query.data);
     if (command !== undefined) {
       await this.handleCommandCallback(query, command, api);
       return;
@@ -517,23 +461,21 @@ export class TelegramChannel implements MessagingChannel {
     const index = Number(match[2]);
     if (token === undefined) return;
     const pending = this.#pendingChoices.get(token);
-    if (pending === undefined || pending.userId !== query.from.id) {
+    if (pending === undefined || pending.userId !== String(query.from.id)) {
       await api.answerCallbackQuery(query.id, { text: "This choice has expired." });
       return;
     }
     const selected = pending.options[index];
     if (selected === undefined) return;
-    clearTimeout(pending.timer);
-    this.#pendingChoices.delete(token);
-    pending.result.resolve(selected.id);
+    this.#pendingChoices.select(token, selected.id);
     await Promise.allSettled([
       api.answerCallbackQuery(query.id, { text: selected.label.slice(0, 200) }),
-      this.clearChoiceKeyboard(api, pending),
+      this.clearChoiceKeyboard(api, pending.context),
     ]);
   }
 
-  private async clearChoiceKeyboard(api: Api, pending: PendingChoice): Promise<void> {
-    await api.editMessageReplyMarkup(pending.chatId, pending.messageId, {
+  private async clearChoiceKeyboard(api: Api, context: TelegramChoiceContext): Promise<void> {
+    await api.editMessageReplyMarkup(context.chatId, context.messageId, {
       reply_markup: { inline_keyboard: [] },
     });
   }
