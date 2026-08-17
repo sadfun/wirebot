@@ -22,11 +22,11 @@ RUN bun build --compile --minify --bytecode --sourcemap \
       src/cli/main.ts --outfile dist/wirebot
 RUN bun scripts/bake-toolchains.ts /toolchains "$([ "$TARGETARCH" = "arm64" ] && echo arm64 || echo x64)"
 
-# Runtime stage: an Ubuntu machine for the agent. Wirebot and its pinned
+# Runtime stage: a Debian machine for the agent. Wirebot and its pinned
 # toolchains live in the image under /opt/wirebot; everything the user should
 # keep across image updates lives in the /data volume, with /usr/local and
 # /home/linuxbrew symlinked into it.
-FROM ubuntu:24.04
+FROM debian:13-slim
 ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -37,7 +37,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       unzip zip tar gzip bzip2 xz-utils zstd \
       jq ripgrep sqlite3 rsync \
       dnsutils iputils-ping netcat-openbsd \
-      python3 python3-pip python3-venv pipx \
+      python3 python3-pip python3-venv python3-websockets pipx \
+      chromium fonts-liberation \
       build-essential pkg-config \
       ffmpeg imagemagick \
     && rm -rf /var/lib/apt/lists/* \
@@ -72,7 +73,7 @@ RUN set -eu; \
 
 # The agent user owns /data and has passwordless sudo; the Wirebot install
 # under /opt/wirebot stays root-owned so the agent cannot corrupt it.
-RUN userdel -r ubuntu \
+RUN if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi \
     && useradd --uid 1000 --no-create-home --home-dir /data/home --shell /bin/bash wirebot \
     && echo "wirebot ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/wirebot \
     && chmod 0440 /etc/sudoers.d/wirebot

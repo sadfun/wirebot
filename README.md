@@ -63,7 +63,7 @@ Slack and Discord. No OpenAI API key is required.
 
 ### The machine model
 
-The container filesystem is the **image**: Ubuntu, the wirebot binary, the pinned Codex CLI, and a preinstalled toolset (git, python3, build-essential, ffmpeg, imagemagick, jq, ripgrep, and more). Updating Wirebot means pulling a new image and recreating the container — the image is never modified in place.
+The container filesystem is the **image**: Debian, the wirebot binary, the pinned Codex CLI, Chromium, and a preinstalled toolset (git, python3, build-essential, ffmpeg, imagemagick, jq, ripgrep, and more). Updating Wirebot means pulling a new image and recreating the container — the image is never modified in place.
 
 Everything personal lives in the **`/data` volume** and survives every update:
 
@@ -74,11 +74,20 @@ Everything personal lives in the **`/data` volume** and survives every update:
 | `/data/usr-local`  | `/usr/local` is a symlink here: `make install`, static binaries, pip/npm prefixes |
 | `/data/linuxbrew`  | `/home/linuxbrew` is a symlink here: an optional Homebrew installation            |
 | `/data/codex-home` | Codex login, `config.toml`, skills, sessions (`CODEX_HOME`)                       |
+| `/data/chromium`   | Local Chromium profile and site sessions                                           |
 | `/data/*.json`     | Wirebot conversations, settings, and scheduled runs                               |
 
 The agent runs as an unprivileged user with passwordless sudo, so `apt-get install` works — but apt installs land outside `/data` and disappear on the next image update. Codex is told this contract on every turn: one-off needs can use apt, while software worth keeping belongs in `/usr/local`, the home directory, or Homebrew. Popular missing tools are good candidates for the image itself; open an issue.
 
 Codex's own command sandbox defaults to `danger-full-access` inside the container: the container boundary is the sandbox, and the machine belongs to the agent. Approval policy is separate and stays interactive by default; both are editable in the settings Mini App. This also means anything with access to the container has access to everything in it, including Codex credentials — treat the container and its volume like a personal machine.
+
+### Local Chromium
+
+Wirebot includes Chromium and a `chromium-browser` skill for browser tasks on headless servers. Chromium starts on demand, exposes CDP only on container loopback, and stores its profile under `/data/chromium` so site sessions survive image updates. No host browser, extension, browser sidecar, or published debugging port is required.
+
+The skill follows Codex's semantic-first lifecycle: each task gets a named session, newly created tabs are managed and cleaned up, explicitly claimed tabs are only released, and marked deliverables remain open. The agent reads compact DOM snapshots and acts through semantic element refs; screenshots are a fallback. It never reads cookies or profile storage directly.
+
+This is Wirebot's own small CDP implementation; no OpenAI browser-extension code or artifacts are included.
 
 ### Updates
 
