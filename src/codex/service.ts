@@ -155,7 +155,7 @@ type ExplicitSkillInputProvider = (
 export interface CodexServiceProviders {
   readonly effectiveSettings?: EffectiveCodexSettingsProvider;
   readonly explicitSkillInputs?: ExplicitSkillInputProvider;
-  /** Static deployment-environment context added to every turn (e.g. the container persistence contract). */
+  /** Static deployment-environment context added to every turn. */
   readonly environmentContext?: ApplicationContext;
   readonly externalAuthTokens?: (
     request: ChatgptAuthTokensRefreshParams,
@@ -1146,28 +1146,13 @@ All normal Codex filesystem, shell, network, approval, and project behavior rema
   };
 }
 
-/**
- * The persistence contract for the official Wirebot container image. The
- * paths listed here mirror the image layout in Dockerfile/entrypoint.sh —
- * update both together.
- */
+/** Identifies the official Wirebot container; detailed guidance lives in its bundled skill. */
 export function createContainerEnvironmentContext(): ApplicationContext {
   return {
     "wirebot.environment": {
       kind: "application",
-      value: `This session runs inside the Wirebot container, an Ubuntu-based image dedicated to this user. You have a normal Linux machine with passwordless sudo and common tools preinstalled (ffmpeg, git, python3, build tools, and more).
-
-The operator updates Wirebot by replacing the container image, which resets the filesystem. Only these locations are persistent — they live on a mounted volume and survive every update:
-- the Codex workspace and your home directory,
-- /usr/local (a symlink into the volume) for manually installed software,
-- /home/linuxbrew for a Homebrew installation, if one is set up.
-
-Everything else resets on update. In particular, packages installed with apt disappear. Choose installation targets accordingly:
-- apt-get is fine for one-off needs in the current session.
-- When the user wants a tool to stay available, install it into /usr/local (static binaries, make install), the home directory (uv, pipx, cargo, npm prefix), or via Homebrew.
-- Keep long-lived configuration (dotfiles, git config, SSH keys) in the home directory, where it persists.
-
-There is no systemd in this container. Processes you start do not survive restarts; use Wirebot scheduled runs when something must be checked or re-established periodically.`,
+      value:
+        "This session runs inside Wirebot's Ubuntu container, a dedicated machine for this user with passwordless sudo and the standard Wirebot toolset.",
     },
   };
 }
