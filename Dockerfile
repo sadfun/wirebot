@@ -87,6 +87,7 @@ RUN mkdir -p /opt/wirebot/seed \
 COPY --from=build /app/dist/wirebot /opt/wirebot/bin/wirebot
 COPY --from=build /app/dist/miniapp/public /opt/wirebot/miniapp
 COPY --from=build /toolchains /opt/wirebot/toolchains
+COPY capabilities/skills /etc/codex/skills
 COPY docker/entrypoint.sh /opt/wirebot/bin/entrypoint.sh
 RUN chmod 0755 /opt/wirebot/bin/wirebot /opt/wirebot/bin/entrypoint.sh \
     # The bake runs as root; the agent user only needs to read and execute.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wirebot Runtime"
+  short_description: "Work safely in the Wirebot container"
+  default_prompt: "Use $wirebot-runtime to explain what persists across Wirebot image updates."
