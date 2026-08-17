@@ -11,3 +11,4 @@ coverage
 *.log
 *.profraw
 docker-compose.yml
+!capabilities/skills/**
