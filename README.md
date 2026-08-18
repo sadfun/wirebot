@@ -63,7 +63,7 @@ Slack and Discord. No OpenAI API key is required.
 
 ### The machine model
 
-The container filesystem is the **image**: Debian, the wirebot binary, the pinned Codex CLI, a Playwright browser stack, and a preinstalled toolset (git, python3, build-essential, ffmpeg, imagemagick, jq, ripgrep, and more). Updating Wirebot means pulling a new image and recreating the container — the image is never modified in place.
+The container filesystem is the **image**: Debian, the wirebot binary, the pinned Codex CLI, a Patchright and Chromium browser stack, and a preinstalled toolset (git, python3, build-essential, ffmpeg, imagemagick, jq, ripgrep, and more). Updating Wirebot means pulling a new image and recreating the container — the image is never modified in place.
 
 Everything personal lives in the **`/data` volume** and survives every update:
 
@@ -83,13 +83,13 @@ Codex's own command sandbox defaults to `danger-full-access` inside the containe
 
 ### Local browser
 
-Wirebot includes Playwright and a `chromium-browser` skill for browser tasks on servers. A private browser service starts on demand, communicates only over a user-owned Unix socket, and stores its profile under `/data/chromium` so site sessions survive image updates. It runs headful on Xvfb by default. No host browser, extension, browser sidecar, or debugging port is required.
+Wirebot includes Debian Chromium, the Playwright-compatible Patchright driver, and a `chromium-browser` skill for browser tasks on servers. A private browser service starts on demand, communicates only over a user-owned Unix socket, and stores its profile under `/data/chromium` so site sessions survive image updates. It runs headful on Xvfb by default. No host browser, extension, browser sidecar, or debugging port is required.
 
-On amd64, the image pins Clearcote's open-source engine and verifies the browser archive with the checksum embedded in its pinned SDK. Clearcote does not publish ARM64 binaries yet, so ARM64 uses Debian Chromium through the same Playwright interface. Set `WIREBOT_BROWSER_ENGINE=chromium` to use the Debian browser explicitly.
+Patchright removes common Playwright and CDP automation signals while retaining Playwright's API. The image pins Patchright, and Debian supplies security-updated Chromium for both amd64 and ARM64 whenever the image is rebuilt.
 
 The skill follows Codex's semantic-first lifecycle: each task gets a named session, newly created tabs are managed and cleaned up, explicitly claimed tabs are only released, and marked deliverables remain open. Playwright provides auto-waiting plus frame, open-shadow-root, upload, select, drag/drop, keyboard, and coordinate interaction. The agent reads compact DOM snapshots and acts through refs; screenshots and coordinates are fallbacks. It never reads cookies or profile storage directly.
 
-The service uses Clearcote and Playwright through their public APIs; no OpenAI browser-extension code or artifacts are included.
+The service uses Patchright through its public API; no OpenAI browser-extension code or artifacts are included.
 
 ### Updates
 

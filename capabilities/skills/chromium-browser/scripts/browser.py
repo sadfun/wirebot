@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Small, persistent Playwright browser service for Wirebot."""
+"""Small, persistent Patchright browser service for Wirebot."""
 
 import argparse
 import fcntl
 import json
 import os
 from pathlib import Path
-import secrets
 import shutil
 import socket
 import socketserver
@@ -19,7 +18,6 @@ PROFILE = Path(os.environ.get("WIREBOT_BROWSER_PROFILE", "/data/chromium"))
 SOCKET_PATH = Path(os.environ.get("WIREBOT_BROWSER_SOCKET", "/tmp/wirebot-browser.sock"))
 START_LOCK = Path(f"{SOCKET_PATH}.start.lock")
 LOG_PATH = Path(os.environ.get("WIREBOT_BROWSER_LOG", "/tmp/wirebot-browser.log"))
-ENGINE = os.environ.get("WIREBOT_BROWSER_ENGINE", "auto")
 MAX_REQUEST = 1024 * 1024
 SELECTOR = (
     "a[href],button,input,textarea,select,summary,[role],[contenteditable=true],"
@@ -35,16 +33,6 @@ def truthy(name, default=False):
 def supported_url(url):
     if not (url.startswith("http://") or url.startswith("https://") or url == "about:blank"):
         raise ValueError("only http(s) URLs and about:blank are supported")
-
-
-def stable_fingerprint():
-    path = PROFILE / ".wirebot-fingerprint"
-    if path.exists():
-        return path.read_text().strip()
-    value = secrets.token_hex(16)
-    path.write_text(value)
-    path.chmod(0o600)
-    return value
 
 
 def start_virtual_display():
@@ -92,8 +80,6 @@ class BrowserService:
             self.register_page(page)
 
     def launch(self):
-        if ENGINE not in {"auto", "clearcote", "chromium"}:
-            raise ValueError("WIREBOT_BROWSER_ENGINE must be auto, clearcote, or chromium")
         headless = truthy("WIREBOT_BROWSER_HEADLESS")
         args = [
             "--no-sandbox",
@@ -101,24 +87,7 @@ class BrowserService:
             "--no-first-run",
             "--no-default-browser-check",
         ]
-        if ENGINE in {"auto", "clearcote"}:
-            try:
-                from clearcote import launch_persistent_context
-            except ImportError:
-                if ENGINE == "clearcote":
-                    raise RuntimeError("Clearcote is not installed for this architecture")
-            else:
-                context = launch_persistent_context(
-                    str(PROFILE),
-                    headless=headless,
-                    fingerprint=stable_fingerprint(),
-                    platform="linux",
-                    args=args,
-                    quiet=True,
-                )
-                return "clearcote", context
-
-        from playwright.sync_api import sync_playwright
+        from patchright.sync_api import sync_playwright
 
         binary = os.environ.get("WIREBOT_CHROMIUM_BINARY", "chromium")
         executable = shutil.which(binary) if "/" not in binary else binary
@@ -126,9 +95,13 @@ class BrowserService:
             raise RuntimeError(f"Chromium binary is unavailable: {binary}")
         self.playwright = sync_playwright().start()
         context = self.playwright.chromium.launch_persistent_context(
-            str(PROFILE), executable_path=executable, headless=headless, args=args
+            str(PROFILE),
+            executable_path=executable,
+            headless=headless,
+            no_viewport=True,
+            args=args,
         )
-        return "chromium", context
+        return "patchright", context
 
     def close(self):
         self.context.close()
@@ -451,7 +424,7 @@ def ensure_service():
 
 
 def parser():
-    result = argparse.ArgumentParser(description="Control Wirebot's local Playwright browser")
+    result = argparse.ArgumentParser(description="Control Wirebot's local Patchright browser")
     result.add_argument("--session", default=os.environ.get("WIREBOT_BROWSER_SESSION", "default"))
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("status")

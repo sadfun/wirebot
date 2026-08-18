@@ -3,9 +3,9 @@ name: chromium-browser
 description: Use Wirebot's local Chromium for opening, browsing, inspecting, navigating, or interacting with websites in server environments.
 ---
 
-# Playwright Browser
+# Patchright Chromium Browser
 
-Use the bundled semantic Playwright CLI. In the Wirebot image it is:
+Use the bundled semantic Patchright CLI. Patchright retains the Playwright API while reducing common automation signals. In the Wirebot image the CLI is:
 
 ```sh
 $WIREBOT_BROWSER_PYTHON /etc/codex/skills/chromium-browser/scripts/browser.py --help
@@ -43,7 +43,7 @@ $WIREBOT_BROWSER_PYTHON /etc/codex/skills/chromium-browser/scripts/browser.py --
 - `click-at X Y`, `scroll X Y`, `wait MILLISECONDS`
 - `mark`, `close`, `finish`
 
-Commands targeting a tab accept `--tab TAB_ID`; otherwise the most recent tab in the session is used. All output is JSON. A private Playwright service starts on demand over a user-only Unix socket and keeps its profile under `/data/chromium`. It uses pinned Clearcote on amd64 and Debian Chromium on architectures Clearcote does not support. The browser is headful on Xvfb by default; set `WIREBOT_BROWSER_HEADLESS=1` to force headless mode.
+Commands targeting a tab accept `--tab TAB_ID`; otherwise the most recent tab in the session is used. All output is JSON. A private Patchright service starts on demand over a user-only Unix socket and keeps its profile under `/data/chromium`. It drives Debian Chromium on both amd64 and ARM64. The browser is headful on Xvfb by default; set `WIREBOT_BROWSER_HEADLESS=1` to force headless mode.
 
 ## Safety
 
