@@ -63,7 +63,7 @@ Slack and Discord. No OpenAI API key is required.
 
 ### The machine model
 
-The container filesystem is the **image**: Debian, the wirebot binary, the pinned Codex CLI, Chromium, and a preinstalled toolset (git, python3, build-essential, ffmpeg, imagemagick, jq, ripgrep, and more). Updating Wirebot means pulling a new image and recreating the container — the image is never modified in place.
+The container filesystem is the **image**: Debian, the wirebot binary, the pinned Codex CLI, a Playwright browser stack, and a preinstalled toolset (git, python3, build-essential, ffmpeg, imagemagick, jq, ripgrep, and more). Updating Wirebot means pulling a new image and recreating the container — the image is never modified in place.
 
 Everything personal lives in the **`/data` volume** and survives every update:
 
@@ -81,13 +81,15 @@ The agent runs as an unprivileged user with passwordless sudo, so `apt-get insta
 
 Codex's own command sandbox defaults to `danger-full-access` inside the container: the container boundary is the sandbox, and the machine belongs to the agent. Approval policy is separate and stays interactive by default; both are editable in the settings Mini App. This also means anything with access to the container has access to everything in it, including Codex credentials — treat the container and its volume like a personal machine.
 
-### Local Chromium
+### Local browser
 
-Wirebot includes Chromium and a `chromium-browser` skill for browser tasks on headless servers. Chromium starts on demand, exposes CDP only on container loopback, and stores its profile under `/data/chromium` so site sessions survive image updates. No host browser, extension, browser sidecar, or published debugging port is required.
+Wirebot includes Playwright and a `chromium-browser` skill for browser tasks on servers. A private browser service starts on demand, communicates only over a user-owned Unix socket, and stores its profile under `/data/chromium` so site sessions survive image updates. It runs headful on Xvfb by default. No host browser, extension, browser sidecar, or debugging port is required.
 
-The skill follows Codex's semantic-first lifecycle: each task gets a named session, newly created tabs are managed and cleaned up, explicitly claimed tabs are only released, and marked deliverables remain open. The agent reads compact DOM snapshots and acts through semantic element refs; screenshots are a fallback. It never reads cookies or profile storage directly.
+On amd64, the image pins Clearcote's open-source engine and verifies the browser archive with the checksum embedded in its pinned SDK. Clearcote does not publish ARM64 binaries yet, so ARM64 uses Debian Chromium through the same Playwright interface. Set `WIREBOT_BROWSER_ENGINE=chromium` to use the Debian browser explicitly.
 
-This is Wirebot's own small CDP implementation; no OpenAI browser-extension code or artifacts are included.
+The skill follows Codex's semantic-first lifecycle: each task gets a named session, newly created tabs are managed and cleaned up, explicitly claimed tabs are only released, and marked deliverables remain open. Playwright provides auto-waiting plus frame, open-shadow-root, upload, select, drag/drop, keyboard, and coordinate interaction. The agent reads compact DOM snapshots and acts through refs; screenshots and coordinates are fallbacks. It never reads cookies or profile storage directly.
+
+The service uses Clearcote and Playwright through their public APIs; no OpenAI browser-extension code or artifacts are included.
 
 ### Updates
 

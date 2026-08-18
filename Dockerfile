@@ -18,7 +18,7 @@ COPY src ./src
 RUN bun run build
 RUN bun build --compile --minify --bytecode --sourcemap \
       --define WIREBOT_COMPILED=true \
-      --target="bun-linux-$([ "$TARGETARCH" = "arm64" ] && echo arm64 || echo x64)" \
+      --target="bun-linux-$([ "$TARGETARCH" = "arm64" ] && echo arm64 || echo x64-baseline)" \
       src/cli/main.ts --outfile dist/wirebot
 RUN bun scripts/bake-toolchains.ts /toolchains "$([ "$TARGETARCH" = "arm64" ] && echo arm64 || echo x64)"
 
@@ -37,12 +37,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       unzip zip tar gzip bzip2 xz-utils zstd \
       jq ripgrep sqlite3 rsync \
       dnsutils iputils-ping netcat-openbsd \
-      python3 python3-pip python3-venv python3-websockets pipx \
-      chromium fonts-liberation \
+      python3 python3-pip python3-venv pipx \
+      chromium xvfb fonts-liberation \
       build-essential pkg-config \
       ffmpeg imagemagick \
     && rm -rf /var/lib/apt/lists/* \
     && locale-gen en_US.UTF-8
+
+# Browser automation always uses Playwright. Clearcote currently publishes
+# Linux x64 only, so amd64 gets its pinned, checksum-verified engine while
+# arm64 uses Debian Chromium behind the same Wirebot browser interface.
+RUN mkdir -p /opt/wirebot/clearcote-cache \
+    && python3 -m venv /opt/wirebot/browser-venv \
+    && case "$TARGETARCH" in \
+      amd64) \
+        /opt/wirebot/browser-venv/bin/pip install --no-cache-dir --disable-pip-version-check \
+          "playwright==1.62.0" "clearcote==0.27.0"; \
+        CLEARCOTE_CACHE=/opt/wirebot/clearcote-cache \
+          /opt/wirebot/browser-venv/bin/python -c \
+          'from clearcote import download; print(download(quiet=True))';; \
+      *) \
+        /opt/wirebot/browser-venv/bin/pip install --no-cache-dir --disable-pip-version-check \
+          "playwright==1.62.0";; \
+    esac
 
 # Pinned quick-tunnel and voice-transcription binaries, verified against
 # GitHub's published SHA-256 digests (update versions and checksums together).
@@ -92,13 +109,17 @@ COPY capabilities/skills /etc/codex/skills
 COPY docker/entrypoint.sh /opt/wirebot/bin/entrypoint.sh
 RUN chmod 0755 /opt/wirebot/bin/wirebot /opt/wirebot/bin/entrypoint.sh \
     # The bake runs as root; the agent user only needs to read and execute.
-    && chmod -R a+rX /opt/wirebot/toolchains /opt/wirebot/miniapp /opt/wirebot/seed
+    && chmod -R a+rX /opt/wirebot/browser-venv /opt/wirebot/clearcote-cache \
+      /opt/wirebot/toolchains /opt/wirebot/miniapp /opt/wirebot/seed
 
 ENV WIREBOT_CONTAINER=1 \
     WIREBOT_DATA_DIR=/data \
     CODEX_WORKSPACE=/data/workspace \
     WIREBOT_TOOLCHAINS_DIR=/opt/wirebot/toolchains \
     WIREBOT_ASSETS_DIR=/opt/wirebot/miniapp \
+    WIREBOT_BROWSER_PYTHON=/opt/wirebot/browser-venv/bin/python \
+    CLEARCOTE_CACHE=/opt/wirebot/clearcote-cache \
+    CLEARCOTE_AUTO_UPDATE=0 \
     HOME=/data/home \
     HOST=0.0.0.0 \
     CODEX_CHECK_UPDATES=false \
