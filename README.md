@@ -83,13 +83,13 @@ Codex's own command sandbox defaults to `danger-full-access` inside the containe
 
 ### Local browser
 
-Wirebot includes Debian Chromium, the Playwright-compatible Patchright driver, and a `chromium-browser` skill for browser tasks on servers. A private browser service starts on demand, communicates only over a user-owned Unix socket, and stores its profile under `/data/chromium` so site sessions survive image updates. It runs headful on Xvfb by default. No host browser, extension, browser sidecar, or debugging port is required.
+Wirebot includes Debian Chromium, Patchright's Playwright-compatible agent CLI, and a `chromium-browser` skill for browser tasks on servers. Patchright starts isolated named browser sessions on demand over local Unix sockets and stores persistent session profiles under `/data/chromium`. It runs headful on Xvfb by default. No host browser, extension, browser sidecar, or debugging port is required.
 
 Patchright removes common Playwright and CDP automation signals while retaining Playwright's API. The image pins Patchright, and Debian supplies security-updated Chromium for both amd64 and ARM64 whenever the image is rebuilt.
 
-The skill follows Codex's semantic-first lifecycle: each task gets a named session, newly created tabs are managed and cleaned up, explicitly claimed tabs are only released, and marked deliverables remain open. Playwright provides auto-waiting plus frame, open-shadow-root, upload, select, drag/drop, keyboard, and coordinate interaction. The agent reads compact DOM snapshots and acts through refs; screenshots and coordinates are fallbacks. It never reads cookies or profile storage directly.
+The skill follows Codex's semantic-first lifecycle: each task gets an isolated named session, reads compact page snapshots, acts through element refs, and closes the session when finished unless its browser is a requested deliverable. Patchright supplies auto-waiting plus frames, shadow DOM, uploads, selects, drag/drop, dialogs, keyboard, coordinate interaction, and a visual session dashboard. Screenshots and coordinates remain fallbacks. The skill never reads cookies or profile storage directly.
 
-The service uses Patchright through its public API; no OpenAI browser-extension code or artifacts are included.
+The launcher uses Patchright's public agent CLI; no OpenAI browser-extension code or artifacts are included.
 
 ### Updates
 

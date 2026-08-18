@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+
+browser_python="${WIREBOT_BROWSER_PYTHON:-/opt/wirebot/browser-venv/bin/python}"
+browser_config="${WIREBOT_BROWSER_CONFIG:-/etc/codex/skills/chromium-browser/cli.config.json}"
+browser_cache="${WIREBOT_BROWSER_PROFILE:-/data/chromium}"
+browser_output="${WIREBOT_BROWSER_OUTPUT_DIR:-/tmp/wirebot-browser}"
+
+export XDG_CACHE_HOME="$browser_cache"
+export PLAYWRIGHT_MCP_CONFIG="$browser_config"
+export PLAYWRIGHT_MCP_EXECUTABLE_PATH="${WIREBOT_CHROMIUM_BINARY:-/usr/bin/chromium}"
+export PLAYWRIGHT_MCP_OUTPUT_DIR="$browser_output"
+mkdir -p "$browser_cache" "$browser_output"
+
+case "${WIREBOT_BROWSER_HEADLESS:-0}" in
+  1|true|TRUE|yes|YES|on|ON)
+    export PLAYWRIGHT_MCP_HEADLESS=true
+    ;;
+  *)
+    export PLAYWRIGHT_MCP_HEADLESS=false
+    display="${WIREBOT_BROWSER_DISPLAY:-:99}"
+    export DISPLAY="$display"
+    display_number="${display#:}"
+    display_number="${display_number%%.*}"
+    display_socket="/tmp/.X11-unix/X$display_number"
+    start_lock="/tmp/wirebot-xvfb-start.lock"
+
+    if [ ! -S "$display_socket" ] && mkdir "$start_lock" 2>/dev/null; then
+      if [ ! -S "$display_socket" ]; then
+        Xvfb "$display" -screen 0 1440x900x24 -nolisten tcp \
+          > /tmp/wirebot-xvfb.log 2>&1 &
+      fi
+      rmdir "$start_lock"
+    fi
+
+    attempts=0
+    while [ ! -S "$display_socket" ] && [ "$attempts" -lt 50 ]; do
+      attempts=$((attempts + 1))
+      sleep 0.1
+    done
+    if [ ! -S "$display_socket" ]; then
+      echo "Xvfb did not start on $display" >&2
+      exit 1
+    fi
+    ;;
+esac
+
+exec "$browser_python" -m patchright cli "$@"

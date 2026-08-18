@@ -45,7 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && locale-gen en_US.UTF-8
 
 # Patchright keeps the Playwright API while removing common automation leaks.
-# It drives Debian's security-updated Chromium on both supported architectures.
+# Its agent CLI drives Debian's security-updated Chromium on both architectures.
 RUN python3 -m venv /opt/wirebot/browser-venv \
     && /opt/wirebot/browser-venv/bin/pip install --no-cache-dir --disable-pip-version-check \
       "patchright==1.62.1"
@@ -97,6 +97,11 @@ COPY --from=build /toolchains /opt/wirebot/toolchains
 COPY capabilities/skills /etc/codex/skills
 COPY docker/entrypoint.sh /opt/wirebot/bin/entrypoint.sh
 RUN chmod 0755 /opt/wirebot/bin/wirebot /opt/wirebot/bin/entrypoint.sh \
+      /etc/codex/skills/chromium-browser/scripts/playwright-cli \
+    && ln -s /etc/codex/skills/chromium-browser/scripts/playwright-cli \
+      /opt/wirebot/bin/playwright-cli \
+    && ln -s /etc/codex/skills/chromium-browser/scripts/playwright-cli \
+      /usr/bin/playwright-cli \
     # The bake runs as root; the agent user only needs to read and execute.
     && chmod -R a+rX /opt/wirebot/browser-venv /opt/wirebot/toolchains \
       /opt/wirebot/miniapp /opt/wirebot/seed
