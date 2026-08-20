@@ -23,24 +23,26 @@ case "${WIREBOT_BROWSER_HEADLESS:-0}" in
     display_number="${display#:}"
     display_number="${display_number%%.*}"
     display_socket="/tmp/.X11-unix/X$display_number"
-    start_lock="/tmp/wirebot-xvfb-start.lock"
+    start_lock="/tmp/wirebot-xvfb-$display_number.lock"
 
-    if [ ! -S "$display_socket" ] && mkdir "$start_lock" 2>/dev/null; then
-      if [ ! -S "$display_socket" ]; then
-        Xvfb "$display" -screen 0 1440x900x24 -nolisten tcp \
-          > /tmp/wirebot-xvfb.log 2>&1 &
-      fi
-      rmdir "$start_lock"
-    fi
-
-    attempts=0
-    while [ ! -S "$display_socket" ] && [ "$attempts" -lt 50 ]; do
-      attempts=$((attempts + 1))
-      sleep 0.1
-    done
     if [ ! -S "$display_socket" ]; then
-      echo "Xvfb did not start on $display" >&2
-      exit 1
+      (
+        flock -x 9
+        if [ ! -S "$display_socket" ]; then
+          Xvfb "$display" -screen 0 1440x900x24 -nolisten tcp \
+            9>&- > /tmp/wirebot-xvfb.log 2>&1 &
+        fi
+
+        attempts=0
+        while [ ! -S "$display_socket" ] && [ "$attempts" -lt 50 ]; do
+          attempts=$((attempts + 1))
+          sleep 0.1
+        done
+        if [ ! -S "$display_socket" ]; then
+          echo "Xvfb did not start on $display" >&2
+          exit 1
+        fi
+      ) 9>"$start_lock"
     fi
     ;;
 esac

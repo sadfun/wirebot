@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       jq ripgrep sqlite3 rsync \
       dnsutils iputils-ping netcat-openbsd \
       python3 python3-pip python3-venv pipx \
-      chromium xvfb fonts-liberation \
+      chromium chromium-sandbox xvfb fonts-liberation \
       build-essential pkg-config \
       ffmpeg imagemagick \
     && rm -rf /var/lib/apt/lists/* \

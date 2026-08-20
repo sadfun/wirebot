@@ -4,12 +4,8 @@
     "launchOptions": {
       "executablePath": "/usr/bin/chromium",
       "headless": false,
-      "args": [
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--no-first-run",
-        "--no-default-browser-check"
-      ]
+      "chromiumSandbox": true,
+      "args": ["--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check"]
     }
   },
   "outputDir": "/tmp/wirebot-browser",
