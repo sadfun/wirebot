@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, jest } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { DraftReplyStream } from "../src/channels/draft-stream.js";
 import { Logger } from "../src/shared/logger.js";
 
@@ -34,10 +34,6 @@ class RecordingDraftStream extends DraftReplyStream {
   }
 }
 
-afterEach(() => {
-  jest.useRealTimers();
-});
-
 describe("DraftReplyStream", () => {
   it("posts one thinking block and replaces it with the final answer", async () => {
     const stream = new RecordingDraftStream();
@@ -50,16 +46,14 @@ describe("DraftReplyStream", () => {
     expect(stream.posts).toEqual(["▌ Thinking…"]);
   });
 
-  it("replaces thinking with answer text while streaming", async () => {
-    jest.useFakeTimers();
+  it("keeps the thinking placeholder until the complete answer is available", async () => {
     const stream = new RecordingDraftStream();
 
     await stream.start();
     stream.appendFinal("Working answer");
-    jest.advanceTimersByTime(1_500);
-    await Promise.resolve();
 
-    expect(stream.updates).toEqual(["Working answer▌"]);
+    expect(stream.posts).toEqual(["▌ Thinking…"]);
+    expect(stream.updates).toEqual([]);
   });
 
   it("posts only overflow chunks after replacing the thinking message", async () => {
@@ -76,11 +70,12 @@ describe("DraftReplyStream", () => {
     const stream = new RecordingDraftStream();
 
     await stream.start();
+    stream.appendFinal("Partial preview");
     stream.failUpdates = true;
     await stream.complete("Finished");
 
     expect(stream.updates).toEqual([]);
-    expect(stream.posts.at(-1)).toBe("Finished");
+    expect(stream.posts).toEqual(["▌ Thinking…", "Finished"]);
   });
 
   it("publishes the latest progress when a turn ends without an answer", async () => {

@@ -15,7 +15,6 @@ import { formatThinkingBlock, splitMessageText } from "./progress.js";
 export abstract class DraftReplyStream implements OutboundStream {
   static readonly #draftIntervalMs = 1_500;
   #progress: ProgressSnapshot = { actions: [], plan: [] };
-  #finalText = "";
   #messageId: string | undefined;
   #starting: Promise<void> | undefined;
   #lastPublishedText = "";
@@ -116,10 +115,11 @@ export abstract class DraftReplyStream implements OutboundStream {
     this.scheduleDraft();
   }
 
-  public appendFinal(delta: string): void {
-    if (this.#lifecycle.closed) return;
-    this.#finalText += delta;
-    this.scheduleDraft();
+  public appendFinal(_delta: string): void {
+    // Keep the editable message as an unambiguous progress placeholder until
+    // complete() can replace it with the authoritative final text. If a
+    // streamed preview were published first and the final edit failed, the
+    // delivery fallback would leave that stale preview beside the full answer.
   }
 
   public async complete(
@@ -201,11 +201,6 @@ export abstract class DraftReplyStream implements OutboundStream {
   }
 
   private preview(): string {
-    if (this.#finalText.length === 0) {
-      return this.renderProgress(formatThinkingBlock(this.#progress)).slice(0, this.#textLimit);
-    }
-    const available = Math.max(0, this.#textLimit - 1);
-    const finalText = available === 0 ? "" : this.renderFinal(this.#finalText).slice(-available);
-    return `${finalText}▌`;
+    return this.renderProgress(formatThinkingBlock(this.#progress)).slice(0, this.#textLimit);
   }
 }
