@@ -7,15 +7,14 @@ import { DraftThrottle } from "./draft-throttle.js";
 import { formatThinkingBlock, splitMessageText } from "./progress.js";
 
 /**
- * Channel-agnostic streaming reply: one editable progress message whose edits
- * are throttled to one per interval, followed by the final answer as separate
- * messages. Connectors supply the transport (post/update) and the
+ * Channel-agnostic streaming reply: one editable message that starts as
+ * progress and is replaced by the final answer. Edits are throttled to one
+ * per interval. Connectors supply the transport (post/update) and the
  * channel-specific text rendering; all draft/lifecycle state lives here.
  */
 export abstract class DraftReplyStream implements OutboundStream {
   static readonly #draftIntervalMs = 1_500;
   #progress: ProgressSnapshot = { actions: [], plan: [] };
-  #finalText = "";
   #messageId: string | undefined;
   #starting: Promise<void> | undefined;
   #lastPublishedText = "";
@@ -116,10 +115,11 @@ export abstract class DraftReplyStream implements OutboundStream {
     this.scheduleDraft();
   }
 
-  public appendFinal(delta: string): void {
-    if (this.#lifecycle.closed) return;
-    this.#finalText += delta;
-    this.scheduleDraft();
+  public appendFinal(_delta: string): void {
+    // Keep the editable message as an unambiguous progress placeholder until
+    // complete() can replace it with the authoritative final text. If a
+    // streamed preview were published first and the final edit failed, the
+    // delivery fallback would leave that stale preview beside the full answer.
   }
 
   public async complete(
@@ -144,22 +144,26 @@ export abstract class DraftReplyStream implements OutboundStream {
     }
     const chunks =
       text.length === 0 ? [] : splitMessageText(this.renderFinal(text), this.#textLimit);
-    // Freeze the progress message without the streaming cursor. The answer
-    // itself arrives as separate messages below: a silent edit of the
-    // thinking message never notifies anyone, and a failed edit must not
-    // take the answer down with it.
+    const [first, ...remaining] = chunks;
+    let chunksToPost = chunks;
     if (this.#messageId !== undefined) {
-      await this.update(
-        this.#messageId,
-        this.renderProgress(formatThinkingBlock(this.#progress)).slice(0, this.#textLimit),
-      ).catch((error: unknown) => {
-        this.logger.debug(`${this.#channelLabel} progress freeze failed`, {
-          error: errorMessage(error),
-        });
-      });
+      const replacement =
+        first ?? this.renderProgress(formatThinkingBlock(this.#progress)).slice(0, this.#textLimit);
+      if (replacement !== this.#lastPublishedText) {
+        try {
+          await this.update(this.#messageId, replacement);
+          chunksToPost = remaining;
+        } catch (error) {
+          this.logger.debug(`${this.#channelLabel} final replacement failed`, {
+            error: errorMessage(error),
+          });
+        }
+      } else {
+        chunksToPost = remaining;
+      }
     }
     let undelivered = 0;
-    for (const chunk of chunks) {
+    for (const chunk of chunksToPost) {
       try {
         await this.post(chunk);
       } catch (error) {
@@ -197,16 +201,6 @@ export abstract class DraftReplyStream implements OutboundStream {
   }
 
   private preview(): string {
-    // Rendering can expand the progress block past the message limit, so
-    // clamp it before budgeting the final-text tail.
-    const progress = this.renderProgress(formatThinkingBlock(this.#progress)).slice(
-      0,
-      this.#textLimit - 3,
-    );
-    if (this.#finalText.length === 0) return `${progress}\n\n▌`;
-    // available === 0 must not fall through to slice(-0), which is slice(0).
-    const available = Math.max(0, this.#textLimit - progress.length - 3);
-    const finalText = available === 0 ? "" : this.renderFinal(this.#finalText).slice(-available);
-    return `${progress}\n\n${finalText}▌`;
+    return this.renderProgress(formatThinkingBlock(this.#progress)).slice(0, this.#textLimit);
   }
 }
