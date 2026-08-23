@@ -2,7 +2,6 @@ import { createWriteStream } from "node:fs";
 import { mkdir, open, realpath, rm, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
-import { lexer, walkTokens } from "marked";
 import type { OutboundAttachment } from "../core/channel.js";
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem.js";
 import { isPathWithin } from "../shared/fs.js";
@@ -30,10 +29,22 @@ export function unavailableAttachmentsWarning(
 
 function extractMarkdownFileTargets(text: string): readonly string[] {
   const targets: string[] = [];
-  walkTokens(lexer(text), (token) => {
-    if (token.type === "link" || token.type === "image") targets.push(token.href);
+  Bun.markdown.render(text, {
+    link: (children, { href }) => {
+      targets.push(unescapeMarkdownTarget(href));
+      return children;
+    },
+    image: (children, { src }) => {
+      targets.push(unescapeMarkdownTarget(src));
+      return children;
+    },
   });
   return targets;
+}
+
+/** Bun returns CommonMark backslash escapes verbatim in link destinations. */
+function unescapeMarkdownTarget(target: string): string {
+  return target.replaceAll(/\\([!-/:-@[-`{-~])/gu, "$1");
 }
 
 export async function resolveOutboundAttachments(

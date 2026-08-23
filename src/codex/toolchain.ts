@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import pinnedCodexVersionText from "../../codex.version" with { type: "text" };
@@ -7,7 +7,6 @@ import { delay } from "../shared/async.js";
 import { BridgeError, errorMessage } from "../shared/errors.js";
 import { atomicWriteJson, ensureDirectory } from "../shared/fs.js";
 import type { Logger } from "../shared/logger.js";
-import { runCommand } from "../shared/process.js";
 
 const versionSchema = z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.+-]*$/);
 
@@ -192,10 +191,7 @@ export class CodexToolchainManager {
 
     const stageDirectory = `${versionDirectory}.stage`;
     await rm(stageDirectory, { recursive: true, force: true });
-    await ensureDirectory(stageDirectory);
-    const archivePath = join(stageDirectory, "codex.tgz");
-    await writeFile(archivePath, payload);
-    await runCommand("tar", ["-xzf", "codex.tgz", "package/vendor"], { cwd: stageDirectory });
+    await new Bun.Archive(payload).extract(stageDirectory, { glob: "package/vendor/**" });
     await rm(versionDirectory, { recursive: true, force: true });
     await rename(join(stageDirectory, "package"), versionDirectory);
     await rm(stageDirectory, { recursive: true, force: true });
