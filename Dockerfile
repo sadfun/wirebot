@@ -3,7 +3,7 @@
 # Build stage: compiles the Mini App assets, the wirebot executable, and
 # downloads the pinned Codex CLI for the target architecture. Runs on the
 # build platform and cross-compiles, so no emulation is needed here.
-FROM --platform=$BUILDPLATFORM oven/bun:1.3 AS build
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.0 AS build
 ARG TARGETARCH
 WORKDIR /app
 

@@ -222,7 +222,7 @@ The runtime card in the Mini App shows the current outcome and offers **Apply ch
 
 ## Source development
 
-Requirements: [Bun](https://bun.com) 1.3 or newer.
+Requirements: [Bun](https://bun.com) 1.4 or newer.
 
 ```sh
 git clone https://github.com/sadfun/wirebot.git
@@ -278,4 +278,4 @@ Removing the `wirebot-data` volume permanently deletes conversations, Codex conf
 
 ## License
 
-Wirebot is released under the [Functional Source License 1.1 with an MIT future license](./LICENSE.md). Each published version becomes available under MIT two years after its release date.
+Wirebot is released under the [MIT License](./LICENSE.md).

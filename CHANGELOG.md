@@ -6,6 +6,9 @@ All notable changes to Wirebot are documented in this file.
 
 ### Changed
 
+- The project now requires Bun 1.4.0 across local development, CI, release builds, and Docker,
+  including Bun's v2 text lockfile format.
+- Wirebot is now distributed under the MIT License.
 - Codex itself is now the config validator: the Mini App previews check structure only, and
   semantic errors surface from the version-checked `config/batchWrite` at save time. The
   hand-maintained mirror of Codex's config rules is gone, and the feature list comes entirely
