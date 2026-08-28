@@ -63,7 +63,7 @@ Slack and Discord. No OpenAI API key is required.
 
 ### The machine model
 
-The container filesystem is the **image**: Ubuntu, the wirebot binary, the pinned Codex CLI, and a preinstalled toolset (git, python3, build-essential, ffmpeg, imagemagick, jq, ripgrep, and more). Updating Wirebot means pulling a new image and recreating the container — the image is never modified in place.
+The container filesystem is the **image**: Debian, the wirebot binary, the pinned Codex CLI, a Patchright and Chromium browser stack, and a preinstalled toolset (git, python3, build-essential, ffmpeg, imagemagick, jq, ripgrep, and more). Updating Wirebot means pulling a new image and recreating the container — the image is never modified in place.
 
 Everything personal lives in the **`/data` volume** and survives every update:
 
@@ -74,11 +74,22 @@ Everything personal lives in the **`/data` volume** and survives every update:
 | `/data/usr-local`  | `/usr/local` is a symlink here: `make install`, static binaries, pip/npm prefixes |
 | `/data/linuxbrew`  | `/home/linuxbrew` is a symlink here: an optional Homebrew installation            |
 | `/data/codex-home` | Codex login, `config.toml`, skills, sessions (`CODEX_HOME`)                       |
+| `/data/chromium`   | Local Chromium profile and site sessions                                           |
 | `/data/*.json`     | Wirebot conversations, settings, and scheduled runs                               |
 
 The agent runs as an unprivileged user with passwordless sudo, so `apt-get install` works — but apt installs land outside `/data` and disappear on the next image update. Codex is told this contract on every turn: one-off needs can use apt, while software worth keeping belongs in `/usr/local`, the home directory, or Homebrew. Popular missing tools are good candidates for the image itself; open an issue.
 
 Codex's own command sandbox defaults to `danger-full-access` inside the container: the container boundary is the sandbox, and the machine belongs to the agent. Approval policy is separate and stays interactive by default; both are editable in the settings Mini App. This also means anything with access to the container has access to everything in it, including Codex credentials — treat the container and its volume like a personal machine.
+
+### Local browser
+
+Wirebot includes Debian Chromium, Patchright's Playwright-compatible agent CLI, and a `chromium-browser` skill for browser tasks on servers. Patchright starts isolated named browser sessions on demand over local Unix sockets and stores persistent session profiles under `/data/chromium`. It runs headful on Xvfb by default. No host browser, extension, browser sidecar, or debugging port is required.
+
+Patchright removes common Playwright and CDP automation signals while retaining Playwright's API. Chromium's process sandbox stays enabled; the included Compose file applies [Playwright's Docker seccomp profile](https://github.com/microsoft/playwright/blob/75d6aebfebeb9af66423390fb957e86ef38652be/utils/docker/seccomp_profile.json) so it can create its isolated namespaces. If you start Wirebot with `docker run` instead, pass `--security-opt seccomp=/path/to/docker/playwright.seccomp`. The image pins Patchright, and Debian supplies security-updated Chromium for both amd64 and ARM64 whenever the image is rebuilt.
+
+The skill follows Codex's semantic-first lifecycle: each task gets an isolated named session, reads compact page snapshots, acts through element refs, and closes the session when finished unless its browser is a requested deliverable. Patchright supplies auto-waiting plus frames, shadow DOM, uploads, selects, drag/drop, dialogs, keyboard, coordinate interaction, and a visual session dashboard. Screenshots and coordinates remain fallbacks. The skill never reads cookies or profile storage directly.
+
+The launcher uses Patchright's public agent CLI; no OpenAI browser-extension code or artifacts are included.
 
 ### Updates
 

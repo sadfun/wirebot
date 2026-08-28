@@ -1,0 +1,13 @@
+{
+  "browser": {
+    "browserName": "chromium",
+    "launchOptions": {
+      "executablePath": "/usr/bin/chromium",
+      "headless": false,
+      "chromiumSandbox": true,
+      "args": ["--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check"]
+    }
+  },
+  "outputDir": "/tmp/wirebot-browser",
+  "codegen": "none"
+}

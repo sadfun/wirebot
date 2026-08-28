@@ -6,6 +6,8 @@ set -eu
 mkdir -p /data/home /data/workspace /data/usr-local /data/linuxbrew
 
 if [ "$(id -u)" = "0" ]; then
+  mkdir -p /tmp/.X11-unix
+  chmod 1777 /tmp/.X11-unix
   if [ ! -e /data/.wirebot-initialized ]; then
     cp -a /opt/wirebot/seed/usr-local/. /data/usr-local/
     cp -a /etc/skel/. /data/home/
