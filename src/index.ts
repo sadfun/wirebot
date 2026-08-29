@@ -156,24 +156,21 @@ export async function runWirebot(): Promise<void> {
     resources.push(runtime);
     await runtime.start();
 
-    // The Mini App authenticates through Telegram initData, so it only runs
-    // when the Telegram connector is configured.
-    let miniApp: MiniAppServer | undefined;
-    if (config.telegram !== undefined) {
-      miniApp = new MiniAppServer({
-        host: config.host,
-        port: config.port,
-        botToken: config.telegram.botToken,
-        allowedUserIds: config.telegram.allowedUserIds,
-        configService,
-        runtime,
-        settings,
-        logger: logger.child({ component: "miniapp" }),
-        ...(config.assetsDirectory === undefined ? {} : { assetDirectory: config.assetsDirectory }),
-      });
-      resources.push(miniApp);
-      await miniApp.start();
-    }
+    // The HTTP server always provides health; Mini App routes additionally
+    // require Telegram initData when that connector is configured.
+    const miniApp = new MiniAppServer({
+      host: config.host,
+      port: config.port,
+      codex,
+      ...(config.telegram === undefined ? {} : { telegramAuth: config.telegram }),
+      configService,
+      runtime,
+      settings,
+      logger: logger.child({ component: "miniapp" }),
+      ...(config.assetsDirectory === undefined ? {} : { assetDirectory: config.assetsDirectory }),
+    });
+    resources.push(miniApp);
+    await miniApp.start();
 
     let publicUrl = config.publicUrl;
     if (publicUrl === undefined && config.telegram !== undefined && config.tunnelMode === "auto") {
@@ -231,7 +228,7 @@ export async function runWirebot(): Promise<void> {
       workspace: config.workspace,
       logger: logger.child({ component: "scheduled-runs" }),
     });
-    miniApp?.setScheduledRuns(scheduledRuns);
+    miniApp.setScheduledRuns(scheduledRuns);
     const bridge = new CodexBridge(
       codex,
       publicUrl,

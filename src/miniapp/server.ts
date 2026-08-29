@@ -16,9 +16,11 @@ import {
 } from "../codex/config-service.js";
 import { CodexRpcError } from "../codex/rpc.js";
 import type { CodexRuntimeService } from "../codex/runtime-service.js";
+import type { CodexService } from "../codex/service.js";
 import { SkillBrowserError } from "../codex/skill-browser.js";
 import type { ProviderReference } from "../core/channel.js";
 import type { WirebotSettingsStore } from "../core/settings-store.js";
+import type { GetAccountResponse } from "../generated/codex/v2/GetAccountResponse.js";
 import { BridgeError, errorMessage } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
 import { type TelegramInitDataUser, validateTelegramInitData } from "./auth.js";
@@ -52,8 +54,11 @@ const applyBankedResetSchema = z.strictObject({
 export interface MiniAppServerOptions {
   readonly host: string;
   readonly port: number;
-  readonly botToken: string;
-  readonly allowedUserIds: ReadonlySet<number>;
+  readonly telegramAuth?: {
+    readonly botToken: string;
+    readonly allowedUserIds: ReadonlySet<number>;
+  };
+  readonly codex: Pick<CodexService, "account">;
   readonly configService: CodexConfigService;
   readonly runtime: MiniAppRuntimeController;
   readonly settings: WirebotSettingsStore;
@@ -86,6 +91,9 @@ export class MiniAppServer {
   readonly #assetDirectory: string;
   readonly #assetCache = new Map<string, Buffer>();
   #scheduledRuns: MiniAppSchedulesController | undefined;
+  #codexHealth: CodexHealth = "starting";
+  #healthRefresh: Promise<void> | undefined;
+  #healthTimer: NodeJS.Timeout | undefined;
   #started = false;
 
   public constructor(options: MiniAppServerOptions) {
@@ -116,11 +124,13 @@ export class MiniAppServer {
 
   public async start(): Promise<void> {
     if (this.#started) return;
-    await Promise.all([
-      access(join(this.#assetDirectory, "index.html")),
-      access(join(this.#assetDirectory, "app.js")),
-      access(join(this.#assetDirectory, "app.css")),
-    ]);
+    if (this.options.telegramAuth !== undefined) {
+      await Promise.all([
+        access(join(this.#assetDirectory, "index.html")),
+        access(join(this.#assetDirectory, "app.js")),
+        access(join(this.#assetDirectory, "app.css")),
+      ]);
+    }
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error): void => {
         this.#server.off("listening", onListening);
@@ -135,7 +145,10 @@ export class MiniAppServer {
       this.#server.listen(this.options.port, this.options.host);
     });
     this.#started = true;
-    this.options.logger.info("Mini App HTTP server listening", {
+    this.refreshCodexHealth();
+    this.#healthTimer = setInterval(() => this.refreshCodexHealth(), 30_000);
+    this.#healthTimer.unref();
+    this.options.logger.info("Wirebot HTTP server listening", {
       host: this.options.host,
       port: this.options.port,
     });
@@ -143,6 +156,7 @@ export class MiniAppServer {
 
   public async stop(): Promise<void> {
     if (!this.#started) return;
+    if (this.#healthTimer !== undefined) clearInterval(this.#healthTimer);
     await new Promise<void>((resolve, reject) => {
       this.#server.close((error) => {
         if (error === undefined) resolve();
@@ -157,7 +171,7 @@ export class MiniAppServer {
     const url = new URL(request.url ?? "/", "http://localhost");
 
     if (request.method === "GET" && url.pathname === "/healthz") {
-      this.sendJson(response, 200, { ok: true });
+      this.sendJson(response, 200, { ok: true, codex: this.#codexHealth });
       return;
     }
 
@@ -326,7 +340,7 @@ export class MiniAppServer {
     }
 
     const asset = staticAssets.get(url.pathname);
-    if (asset !== undefined) {
+    if (asset !== undefined && this.options.telegramAuth !== undefined) {
       await this.sendAsset(response, request.method, asset[0], asset[1]);
       return;
     }
@@ -335,14 +349,33 @@ export class MiniAppServer {
   }
 
   private authenticate(request: IncomingMessage): TelegramInitDataUser {
+    const telegram = this.options.telegramAuth;
+    if (telegram === undefined) throw new HttpError(404, "Not found");
     const authorization = request.headers.authorization;
     if (authorization === undefined || !authorization.toLowerCase().startsWith("tma ")) {
       throw new BridgeError("Telegram authorization is required", "MINIAPP_UNAUTHORIZED");
     }
     return validateTelegramInitData(authorization.slice(4), {
-      botToken: this.options.botToken,
-      allowedUserIds: this.options.allowedUserIds,
+      botToken: telegram.botToken,
+      allowedUserIds: telegram.allowedUserIds,
       maxAgeSeconds: MAX_AUTH_AGE_SECONDS,
+    });
+  }
+
+  private refreshCodexHealth(): void {
+    if (this.#healthRefresh !== undefined) return;
+    const request = this.options.codex.account(true);
+    this.#healthRefresh = (async () => {
+      try {
+        this.#codexHealth = classifyCodexHealth(await Promise.race([request, healthTimeout()]));
+      } catch {
+        this.#codexHealth = "degraded";
+      }
+      // Keep the single-flight guard if the RPC itself outlives our health
+      // timeout; otherwise a wedged app-server would accumulate requests.
+      await request.catch(() => undefined);
+    })().finally(() => {
+      this.#healthRefresh = undefined;
     });
   }
 
@@ -486,6 +519,25 @@ export class MiniAppServer {
     }
     this.sendError(response, 500, "Internal server error");
   }
+}
+
+export type CodexHealth =
+  | "starting"
+  | "authenticated"
+  | "not_required"
+  | "needs_login"
+  | "degraded";
+
+export function classifyCodexHealth(status: GetAccountResponse): CodexHealth {
+  if (status.account !== null) return "authenticated";
+  return status.requiresOpenaiAuth ? "needs_login" : "not_required";
+}
+
+function healthTimeout(): Promise<never> {
+  return new Promise((_, reject) => {
+    const timer = setTimeout(() => reject(new Error("Codex health timed out")), 5_000);
+    timer.unref();
+  });
 }
 
 function telegramScheduleScope(userId: number): Readonly<{
