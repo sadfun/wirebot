@@ -672,10 +672,10 @@ export class CodexService {
     );
   }
 
-  public async account(): Promise<GetAccountResponse> {
+  public async account(refreshToken = false): Promise<GetAccountResponse> {
     return await this.#rpc.request<GetAccountResponse>({
       method: "account/read",
-      params: { refreshToken: false },
+      params: { refreshToken },
     });
   }
 
