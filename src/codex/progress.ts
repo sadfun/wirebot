@@ -139,5 +139,13 @@ function collaborationLabel(
       return "wait for agents";
     case "closeAgent":
       return "close agent";
+    case "sendMessage":
+      return "message agent";
+    case "followupTask":
+      return "assign follow-up task";
+    case "interruptAgent":
+      return "interrupt agent";
+    case "listAgents":
+      return "list agents";
   }
 }
