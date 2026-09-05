@@ -4,8 +4,25 @@ All notable changes to Wirebot are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-05
+
+### Added
+
+- A standalone browser app for Settings, Skills, and Schedules, with bookmarkable routes,
+  responsive desktop and mobile navigation, and system light/dark themes. Admins sign in using
+  a private, one-use link from Telegram's `/web` or Slack/Discord's `/wirebot web` and
+  `/wirebot config`; browser sessions preserve the originating messenger's schedule ownership
+  and delivery destination. Telegram's existing Mini App authentication remains supported.
+- Codex-aware `/healthz` responses report authentication and degraded states from a background
+  account check. The HTTP server runs with any connector, including Slack-only and Discord-only
+  deployments, and the endpoint remains a liveness check with HTTP 200.
+- Container images bundle pre-built skills under `/etc/codex/skills`, including `wirebot-runtime`
+  for filesystem, persistence, and installation guidance previously repeated in turn context.
+
 ### Changed
 
+- The pinned Codex CLI is now 0.153.3, with regenerated app-server protocol bindings and progress
+  labels for the newly supported agent collaboration tools.
 - The project now requires Bun 1.4.0 across local development, CI, release builds, and Docker,
   including Bun's v2 text lockfile format.
 - Bun's native Markdown and archive APIs now replace the `marked` dependency and the external
@@ -28,6 +45,12 @@ All notable changes to Wirebot are documented in this file.
 - `codex check --apply` installs protocol bindings in place and relies on git to restore a
   failed upgrade; removals of app-server methods Wirebot never calls are informational
   instead of blocking.
+
+### Fixed
+
+- Slack and Discord replace the thinking placeholder with the completed answer, posting only
+  overflow chunks as new messages. Failed edits fall back to posting the full answer, and turns
+  without a final answer retain their latest progress.
 
 ### Removed
 
