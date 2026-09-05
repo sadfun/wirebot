@@ -40,7 +40,23 @@ describe("Browser HTTP app", () => {
       expect((await request(path, { method: "HEAD" })).status).toBe(200);
     }
     expect((await request("/app/unknown")).status).toBe(404);
-    expect((await request("/api/config")).status).toBe(401);
+    expect((await request("/app", { method: "POST" })).status).toBe(405);
+    for (const path of [
+      "/api/auth/session",
+      "/api/config",
+      "/api/config/validate",
+      "/api/skills",
+      "/api/skills/resource?skill=test",
+      "/api/usage",
+      "/api/usage/reset",
+      "/api/schedules",
+      "/api/schedules/test",
+      "/api/runtime/reload",
+      "/api/runtime/restart",
+      "/api/unknown",
+    ]) {
+      expect((await request(path, { method: "POST", headers: browserHeaders })).status).toBe(401);
+    }
     expect((await request("/healthz")).status).toBe(200);
   });
 

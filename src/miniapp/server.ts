@@ -18,7 +18,6 @@ import { CodexRpcError } from "../codex/rpc.js";
 import type { CodexRuntimeService } from "../codex/runtime-service.js";
 import type { CodexService } from "../codex/service.js";
 import { SkillBrowserError } from "../codex/skill-browser.js";
-import type { ProviderReference } from "../core/channel.js";
 import type { WirebotSettingsStore } from "../core/settings-store.js";
 import type { GetAccountResponse } from "../generated/codex/v2/GetAccountResponse.js";
 import { BridgeError, errorMessage } from "../shared/errors.js";
@@ -66,8 +65,6 @@ export interface MiniAppServerOptions {
     readonly allowedUserIds: ReadonlySet<number>;
   };
   readonly browserAuth?: BrowserAuth;
-  /** Disable only for a local HTTP development server. Public deployments use HTTPS. */
-  readonly secureCookies?: boolean;
   readonly codex: Pick<CodexService, "account">;
   readonly configService: Pick<CodexConfigService, "read" | "update" | "validate">;
   readonly runtime: MiniAppRuntimeController;
@@ -192,6 +189,22 @@ export class MiniAppServer {
       return;
     }
 
+    if (!url.pathname.startsWith("/api/")) {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        this.sendError(response, 405, "Method not allowed");
+        return;
+      }
+
+      const asset = staticAssets.get(url.pathname);
+      if (asset !== undefined) {
+        await this.sendAsset(response, request.method, asset[0], asset[1]);
+        return;
+      }
+
+      this.sendError(response, 404, "Not found");
+      return;
+    }
+
     if (url.pathname === "/api/auth/exchange") {
       this.requireBrowserRequest(request);
       if (request.method !== "POST") {
@@ -208,16 +221,6 @@ export class MiniAppServer {
       return;
     }
 
-    if (url.pathname === "/api/auth/session") {
-      if (request.method !== "GET") {
-        this.methodNotAllowed(response, "GET");
-        return;
-      }
-      const principal = await this.authenticate(request);
-      this.sendJson(response, 200, { provider: principal.owner.provider });
-      return;
-    }
-
     if (url.pathname === "/api/auth/logout") {
       this.requireBrowserRequest(request);
       if (request.method !== "POST") {
@@ -230,8 +233,18 @@ export class MiniAppServer {
       return;
     }
 
+    const scope = await this.authenticate(request);
+
+    if (url.pathname === "/api/auth/session") {
+      if (request.method !== "GET") {
+        this.methodNotAllowed(response, "GET");
+        return;
+      }
+      this.sendJson(response, 200, { provider: scope.owner.provider });
+      return;
+    }
+
     if (url.pathname === "/api/config/validate") {
-      await this.authenticate(request);
       if (request.method === "POST") {
         const input = await this.readJson(request);
         this.sendJson(response, 200, await this.options.configService.validate(input));
@@ -242,7 +255,6 @@ export class MiniAppServer {
     }
 
     if (url.pathname === "/api/config") {
-      await this.authenticate(request);
       if (request.method === "GET") {
         const snapshot = await this.options.configService.read();
         this.sendJson(response, 200, {
@@ -286,7 +298,6 @@ export class MiniAppServer {
     }
 
     if (url.pathname === "/api/skills") {
-      await this.authenticate(request);
       if (request.method === "GET") {
         this.sendJson(response, 200, { skills: this.options.runtime.skills() });
         return;
@@ -296,7 +307,6 @@ export class MiniAppServer {
     }
 
     if (url.pathname === "/api/usage") {
-      await this.authenticate(request);
       if (request.method === "GET") {
         this.sendJson(response, 200, await this.options.runtime.usageLimits());
         return;
@@ -306,7 +316,6 @@ export class MiniAppServer {
     }
 
     if (url.pathname === "/api/usage/reset") {
-      await this.authenticate(request);
       if (request.method === "POST") {
         const input = applyBankedResetSchema.parse(await this.readJson(request));
         const outcome = await this.options.runtime.applyBankedReset(
@@ -321,7 +330,6 @@ export class MiniAppServer {
     }
 
     if (url.pathname === "/api/skills/resource") {
-      await this.authenticate(request);
       if (request.method === "GET") {
         const skill = url.searchParams.get("skill");
         if (skill === null || skill.length === 0) {
@@ -336,7 +344,6 @@ export class MiniAppServer {
     }
 
     if (url.pathname === "/api/schedules" || url.pathname.startsWith("/api/schedules/")) {
-      const scope = await this.authenticate(request);
       const scheduledRuns = this.requireScheduledRuns();
       if (url.pathname === "/api/schedules") {
         if (request.method === "GET") {
@@ -377,7 +384,6 @@ export class MiniAppServer {
     }
 
     if (url.pathname === "/api/runtime/reload" || url.pathname === "/api/runtime/restart") {
-      await this.authenticate(request);
       if (request.method === "POST") {
         if (url.pathname.endsWith("/reload")) await this.options.runtime.reload();
         else await this.options.runtime.restart();
@@ -385,17 +391,6 @@ export class MiniAppServer {
         return;
       }
       this.methodNotAllowed(response, "POST");
-      return;
-    }
-
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      this.sendError(response, 405, "Method not allowed");
-      return;
-    }
-
-    const asset = staticAssets.get(url.pathname);
-    if (asset !== undefined) {
-      await this.sendAsset(response, request.method, asset[0], asset[1]);
       return;
     }
 
@@ -439,7 +434,7 @@ export class MiniAppServer {
   }
 
   private sessionCookie(request: IncomingMessage): string {
-    const prefix = `${this.cookieName()}=`;
+    const prefix = "__Host-wirebot_session=";
     return (
       request.headers.cookie
         ?.split(";")
@@ -449,14 +444,10 @@ export class MiniAppServer {
     );
   }
 
-  private cookieName(): string {
-    return this.options.secureCookies === false ? "wirebot_session" : "__Host-wirebot_session";
-  }
-
   private setSessionCookie(response: ServerResponse, token: string): void {
     response.setHeader(
       "Set-Cookie",
-      `${this.cookieName()}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${token === "" ? 0 : sessionLifetimeMs / 1_000}${this.options.secureCookies === false ? "" : "; Secure"}`,
+      `__Host-wirebot_session=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${token === "" ? 0 : sessionLifetimeMs / 1_000}`,
     );
   }
 
@@ -638,11 +629,7 @@ function healthTimeout(): Promise<never> {
   });
 }
 
-function telegramScheduleScope(userId: number): Readonly<{
-  owner: ProviderReference;
-  conversation: ProviderReference;
-  deliveryTarget: ProviderReference;
-}> {
+function telegramScheduleScope(userId: number): AppPrincipal {
   return {
     owner: { provider: "telegram", resource: "user", id: String(userId) },
     conversation: {

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { ProviderReference } from "../core/channel.js";
+import { type ProviderReference, sameReference } from "../core/channel.js";
 import { BridgeError } from "../shared/errors.js";
 
 /** Provider-owned identity and destination, shared by both authentication methods. */
@@ -37,7 +37,7 @@ export class BrowserAuth {
     await this.requireAdmin(principal);
     // Only the latest unused link for this admin remains valid.
     for (const [key, grant] of this.#links) {
-      if (sameOwner(grant.principal, principal)) this.#links.delete(key);
+      if (sameReference(grant.principal.owner, principal.owner)) this.#links.delete(key);
     }
     return this.store(this.#links, principal, loginLifetimeMs);
   }
@@ -106,10 +106,6 @@ export class BrowserAuth {
 
 function digest(token: string): string {
   return createHash("sha256").update(token).digest("hex");
-}
-
-function sameOwner(left: AppPrincipal, right: AppPrincipal): boolean {
-  return left.owner.provider === right.owner.provider && left.owner.id === right.owner.id;
 }
 
 function unauthorized(): BridgeError {

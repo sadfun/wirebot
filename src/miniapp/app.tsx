@@ -12,7 +12,6 @@ import {
 import { SchedulesManager } from "./schedules.js";
 import { SettingsForm } from "./settings-form.js";
 import { messageOf, useAsync } from "./shared.js";
-import { SignIn } from "./sign-in.js";
 import { SkillsBrowser } from "./skills.js";
 import { navigateWithUnsavedGuard, telegramReady, webApp } from "./telegram.js";
 import { AppRoot, Button, Placeholder, Spinner, Tabbar } from "./ui.js";
@@ -68,7 +67,6 @@ export function SettingsApp({ loginToken }: { readonly loginToken: string | null
 
   useEffect(() => {
     document.documentElement.dataset.appearance = appearance;
-    document.documentElement.dataset.host = telegramReady ? "telegram" : "browser";
   }, [appearance]);
 
   useEffect(() => {
@@ -153,18 +151,6 @@ export function SettingsApp({ loginToken }: { readonly loginToken: string | null
     if (snapshotLoad.value !== undefined) setSnapshot(snapshotLoad.value);
   }, [snapshotLoad.value]);
 
-  const signIn = async (token: string): Promise<void> => {
-    setAuthBusy(true);
-    setAuthError(undefined);
-    try {
-      await exchangeLogin(token);
-      setSession(await requestSession());
-    } catch (error) {
-      setAuthError(messageOf(error));
-    } finally {
-      setAuthBusy(false);
-    }
-  };
   const signOut = (): void =>
     navigateWithUnsavedGuard(() => {
       setAuthBusy(true);
@@ -199,7 +185,29 @@ export function SettingsApp({ loginToken }: { readonly loginToken: string | null
           </Placeholder>
         </div>
       ) : session === null ? (
-        <SignIn error={authError} busy={authBusy} onSignIn={signIn} />
+        <main className="loadingRoot px-5 py-8">
+          <Placeholder
+            className="rounded-2xl border border-border bg-card py-8"
+            header={<h1 className="text-2xl">Sign in to Wirebot</h1>}
+            description={
+              <div className="space-y-4">
+                <p>Manage Codex settings, skills, and schedules through your bot.</p>
+                <p>
+                  Send <code>/wirebot web</code> in a direct message to your Slack or Discord bot,
+                  or <code>/web</code> in Telegram. Open the private link it replies with.
+                </p>
+                <p>Admin access only. Links work once and expire after 5 minutes.</p>
+                {authError && (
+                  <p className="text-destructive" role="alert">
+                    {authError}
+                  </p>
+                )}
+              </div>
+            }
+          >
+            <Terminal className="size-10 text-primary" aria-hidden="true" />
+          </Placeholder>
+        </main>
       ) : (
         <>
           {!telegramReady && (
