@@ -32,7 +32,8 @@ declare global {
   }
 }
 
-export const webApp = window.Telegram?.WebApp;
+const telegramApp = window.Telegram?.WebApp;
+export const webApp = telegramApp?.initData ? telegramApp : undefined;
 export const telegramReady = webApp !== undefined && webApp.initData.length > 0;
 export const nativeTelegramNavigation = telegramReady && webApp?.BackButton !== undefined;
 

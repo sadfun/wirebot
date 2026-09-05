@@ -173,6 +173,10 @@ export class DiscordChannel implements MessagingChannel {
     );
   }
 
+  public async isAuthorizedAdmin(principal: ProviderReference): Promise<boolean> {
+    return (await this.isAuthorized(principal)) && this.isAdmin(principal.id);
+  }
+
   public async publish(
     targetReference: ProviderReference,
     message: OutboundMessage,

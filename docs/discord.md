@@ -89,6 +89,7 @@ Wirebot owns one global application command with subcommands:
 /wirebot login
 /wirebot logout
 /wirebot config
+/wirebot web
 /wirebot reload
 /wirebot restart
 /wirebot help
@@ -96,8 +97,12 @@ Wirebot owns one global application command with subcommands:
 
 Conversation commands in a server must run inside a Discord thread because a root channel is not
 a stable task boundary. You can also write `!new` or `/new` as a normal direct message, or mention
-the bot with that text in a server. `/wirebot config` opens a compact settings picker in a direct
-message; the larger web Mini App remains Telegram-authenticated.
+the bot with that text in a server. In a direct message, `/wirebot config` or `/wirebot web`
+gives bot admins a private browser sign-in link. It expires after 5 minutes and works once;
+the browser session lasts 12 hours. Set `PUBLIC_URL` to an HTTPS origin or use the automatic
+quick tunnel. Without either, `/wirebot config` keeps the compact in-chat settings picker.
+Browser access follows `DISCORD_ADMIN_USER_IDS`, independently of Discord server roles.
+Schedules remain owned by the signed-in Discord user and new ones deliver to that private chat.
 
 Approvals and user-input prompts arrive as buttons. Only the user who received a prompt can answer
 it, and controls expire after five minutes or disappear when the requesting turn ends. Scheduled

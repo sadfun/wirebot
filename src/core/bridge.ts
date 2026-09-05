@@ -5,6 +5,7 @@ import type { Account } from "../generated/codex/v2/Account.js";
 import type { AccountLoginCompletedNotification } from "../generated/codex/v2/AccountLoginCompletedNotification.js";
 import type { GetAccountResponse } from "../generated/codex/v2/GetAccountResponse.js";
 import type { LoginAccountResponse } from "../generated/codex/v2/LoginAccountResponse.js";
+import type { BrowserAuth } from "../miniapp/browser-auth.js";
 import { BridgeError, errorMessage } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
 import {
@@ -49,6 +50,11 @@ export const botCommands: readonly {
   },
   { command: "login", menuDescription: "Sign in to Codex", help: "sign in to ChatGPT" },
   { command: "logout", menuDescription: "Sign out of Codex", help: "sign out" },
+  {
+    command: "web",
+    menuDescription: "Open Wirebot in a browser",
+    help: "get a temporary browser sign-in link",
+  },
   { command: "config", menuDescription: "Open Codex settings", help: "open Codex settings" },
   {
     command: "reload",
@@ -77,6 +83,7 @@ export const conversationScopedCommands: ReadonlySet<string> = new Set([
 /** Commands that change shared instance state and require provider-admin gating. */
 export const instanceAdminCommands: ReadonlySet<string> = new Set([
   "config",
+  "web",
   "login",
   "logout",
   "reload",
@@ -119,6 +126,7 @@ interface PendingLogin {
 
 export class CodexBridge {
   readonly #codex: CodexService;
+  readonly #browserAuth: BrowserAuth | undefined;
   readonly #publicUrl: string | undefined;
   readonly #logger: Logger;
   readonly #runtimeCommand: CodexRuntimeCommand;
@@ -158,9 +166,11 @@ export class CodexBridge {
     logger: Logger,
     runtimeCommand: CodexRuntimeCommand,
     scheduledRuns: ScheduledRunsEngine,
+    browserAuth?: BrowserAuth,
   ) {
     this.#codex = codex;
     this.#publicUrl = publicUrl;
+    this.#browserAuth = browserAuth;
     this.#logger = logger;
     this.#runtimeCommand = runtimeCommand;
     this.#scheduledRuns = scheduledRuns;
@@ -292,7 +302,14 @@ export class CodexBridge {
           `Signed out of Codex. Send ${commandText(message.address.channel, "login")} whenever you want back in.`,
         );
         return;
+      case "web":
+        await this.openBrowserApp(message);
+        return;
       case "config":
+        if (message.address.channel !== "telegram") {
+          await this.openBrowserApp(message);
+          return;
+        }
         if (!(await this.requirePrivateChat(message))) return;
         if (this.#publicUrl === undefined) {
           await message.responder.sendText(
@@ -321,6 +338,34 @@ export class CodexBridge {
           `Unknown command ${commandText(message.address.channel, command.name)}.\n\n${helpText(message.address.channel)}`,
         );
     }
+  }
+
+  private async openBrowserApp(message: InboundMessage): Promise<void> {
+    if (!(await this.requirePrivateChat(message))) return;
+    if (this.#publicUrl === undefined || this.#browserAuth === undefined) {
+      await message.responder.sendText(
+        "Browser sign-in needs a public URL. Set PUBLIC_URL to your HTTPS origin, or enable WIREBOT_TUNNEL=auto and restart.",
+      );
+      return;
+    }
+    const deliveryTarget = message.address.deliveryTarget;
+    if (deliveryTarget === undefined) {
+      await message.responder.sendText("This messenger does not support browser sign-in yet.");
+      return;
+    }
+    const token = await this.#browserAuth.issue({
+      owner: messageOwner(message),
+      conversation: messageConversation(message),
+      deliveryTarget,
+    });
+    // Fragments are omitted from HTTP requests, including preview fetches.
+    const url = `${this.#publicUrl}/app#login=${token}`;
+    await message.responder.sendText(
+      "Sign in to Wirebot in your browser. This private link works once and expires in 5 minutes. Your browser session lasts 12 hours.",
+      {
+        button: { label: "Open Wirebot", kind: "url", url },
+      },
+    );
   }
 
   private async handleSchedules(message: InboundMessage): Promise<void> {

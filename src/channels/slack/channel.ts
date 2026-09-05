@@ -204,6 +204,10 @@ export class SlackChannel implements MessagingChannel {
     return this.isUserAllowed(principal.id);
   }
 
+  public async isAuthorizedAdmin(principal: ProviderReference): Promise<boolean> {
+    return (await this.isAuthorized(principal)) && this.isAdmin(principal.id);
+  }
+
   private isUserAllowed(userId: string): boolean | Promise<boolean> {
     if (!this.#allowAllWorkspaceMembers) return this.#allowedUserIds.has(userId);
     const cached = this.#membership.get(userId);

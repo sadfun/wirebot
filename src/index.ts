@@ -11,8 +11,10 @@ import { CodexService, createContainerEnvironmentContext } from "./codex/service
 import { CodexToolchainManager, pinnedCodexVersion } from "./codex/toolchain.js";
 import { loadAppConfig } from "./config/env.js";
 import { CodexBridge } from "./core/bridge.js";
+import type { MessagingChannel } from "./core/channel.js";
 import { ConversationStore } from "./core/conversation-store.js";
 import { WirebotSettingsStore } from "./core/settings-store.js";
+import { BrowserAuth } from "./miniapp/browser-auth.js";
 import { MiniAppServer } from "./miniapp/server.js";
 import { QuickTunnel } from "./miniapp/tunnel.js";
 import { deferred } from "./shared/async.js";
@@ -156,12 +158,16 @@ export async function runWirebot(): Promise<void> {
     resources.push(runtime);
     await runtime.start();
 
-    // The HTTP server always provides health; Mini App routes additionally
-    // require Telegram initData when that connector is configured.
+    const authChannels = new Map<string, MessagingChannel>();
+    const browserAuth = new BrowserAuth(
+      (owner) => authChannels.get(owner.provider)?.isAuthorizedAdmin?.(owner) ?? false,
+    );
+    // The same HTTP application serves browsers and the Telegram Mini App.
     const miniApp = new MiniAppServer({
       host: config.host,
       port: config.port,
       codex,
+      browserAuth,
       ...(config.telegram === undefined ? {} : { telegramAuth: config.telegram }),
       configService,
       runtime,
@@ -173,7 +179,7 @@ export async function runWirebot(): Promise<void> {
     await miniApp.start();
 
     let publicUrl = config.publicUrl;
-    if (publicUrl === undefined && config.telegram !== undefined && config.tunnelMode === "auto") {
+    if (publicUrl === undefined && config.tunnelMode === "auto") {
       try {
         const tunnel = new QuickTunnel({
           host: config.host,
@@ -182,12 +188,12 @@ export async function runWirebot(): Promise<void> {
         });
         publicUrl = await tunnel.start();
         resources.push(tunnel);
-        logger.info("The Mini App is exposed through a TryCloudflare quick tunnel", {
+        logger.info("The Wirebot web app is exposed through a TryCloudflare quick tunnel", {
           url: publicUrl,
         });
       } catch (error) {
         logger.warn(
-          "The quick tunnel failed to start and no PUBLIC_URL is set; the settings Mini App is disabled. Set PUBLIC_URL, install cloudflared, or check outbound network access to Cloudflare.",
+          "The quick tunnel failed to start and no PUBLIC_URL is set; browser sign-in links are unavailable. Set PUBLIC_URL, install cloudflared, or check outbound network access to Cloudflare.",
           { error: errorMessage(error) },
         );
       }
@@ -212,15 +218,20 @@ export async function runWirebot(): Promise<void> {
             config.slack,
             join(config.workspace, ".wirebot", "attachments"),
             logger.child({ component: "slack" }),
-            configService,
+            publicUrl === undefined ? configService : undefined,
           );
     const discord =
       config.discord === undefined
         ? undefined
-        : new DiscordChannel(config.discord, logger.child({ component: "discord" }), configService);
+        : new DiscordChannel(
+            config.discord,
+            logger.child({ component: "discord" }),
+            publicUrl === undefined ? configService : undefined,
+          );
     const channels = [telegram, slack, discord].filter(
       (channel): channel is NonNullable<typeof channel> => channel !== undefined,
     );
+    for (const channel of channels) authChannels.set(channel.name, channel);
     const scheduledRuns = new ScheduledRunsEngine({
       store: automations,
       codex,
@@ -235,6 +246,7 @@ export async function runWirebot(): Promise<void> {
       logger.child({ component: "bridge" }),
       runtime,
       scheduledRuns,
+      browserAuth,
     );
     for (const channel of channels) {
       resources.push(channel);
@@ -247,7 +259,7 @@ export async function runWirebot(): Promise<void> {
       version: wirebotVersion,
       codexVersion: pinnedCodexVersion,
       workspace: config.workspace,
-      miniApp: config.telegram === undefined ? "disabled" : `${config.host}:${config.port}`,
+      webApp: publicUrl === undefined ? `${config.host}:${config.port}/app` : `${publicUrl}/app`,
       telegram: telegram === undefined ? "disabled" : "enabled",
       slack: slack === undefined ? "disabled" : "enabled",
       discord: discord === undefined ? "disabled" : "enabled",
