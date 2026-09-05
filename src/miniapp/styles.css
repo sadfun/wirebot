@@ -51,24 +51,26 @@
   text-rendering: optimizeLegibility;
 }
 
-:root[data-appearance="dark"] {
-  color-scheme: dark;
-  --background: #10141c;
-  --foreground: #e5ebf5;
-  --card: #191f2b;
-  --primary: #90b4ff;
-  --primary-foreground: #122544;
-  --secondary: #263248;
-  --secondary-foreground: #d9e5ff;
-  --muted: #242d3c;
-  --muted-foreground: #a0aec3;
-  --accent: #293650;
-  --destructive: #ff8793;
-  --destructive-foreground: #35151a;
-  --border: #303c50;
-  --input: #42516a;
-  --section-header: #a0aec3;
-  --tabbar-background: #191f2b;
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --background: #10141c;
+    --foreground: #e5ebf5;
+    --card: #191f2b;
+    --primary: #90b4ff;
+    --primary-foreground: #122544;
+    --secondary: #263248;
+    --secondary-foreground: #d9e5ff;
+    --muted: #242d3c;
+    --muted-foreground: #a0aec3;
+    --accent: #293650;
+    --destructive: #ff8793;
+    --destructive-foreground: #35151a;
+    --border: #303c50;
+    --input: #42516a;
+    --section-header: #a0aec3;
+    --tabbar-background: #191f2b;
+  }
 }
 
 .telegramApp {
@@ -107,7 +109,7 @@
   text-rendering: optimizeLegibility;
 }
 
-.telegramApp.dark {
+.telegramApp[data-appearance="dark"] {
   --destructive-foreground: var(--tg-theme-text-color, var(--primary-foreground));
   --switch-thumb: var(--tg-theme-text-color, var(--primary-foreground));
 }

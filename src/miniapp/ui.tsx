@@ -57,22 +57,6 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   );
 });
 
-interface AppRootProps extends HTMLAttributes<HTMLDivElement> {
-  readonly appearance: "dark" | "light";
-}
-
-export function AppRoot({ appearance, className, children, ...props }: AppRootProps): ReactElement {
-  return (
-    <div
-      className={cn("min-h-svh bg-background text-foreground", appearance, className)}
-      data-theme={appearance}
-      {...props}
-    >
-      {children}
-    </div>
-  );
-}
-
 interface SectionProps extends HTMLAttributes<HTMLElement> {
   readonly header?: ReactNode;
   readonly footer?: ReactNode;

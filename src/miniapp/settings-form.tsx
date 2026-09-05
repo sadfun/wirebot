@@ -101,11 +101,11 @@ const defaultGranularApproval: GranularApproval = {
 };
 
 interface SettingsFormProps {
-  readonly snapshot: LoadedSnapshot;
-  readonly onSnapshot: (snapshot: LoadedSnapshot) => void;
+  readonly initialSnapshot: LoadedSnapshot;
 }
 
-export function SettingsForm({ snapshot, onSnapshot }: SettingsFormProps): ReactElement {
+export function SettingsForm({ initialSnapshot }: SettingsFormProps): ReactElement {
+  const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [draft, setDraft] = useState<EditableCodexConfig>(snapshot.values);
   const [environmentText, setEnvironmentText] = useState(() =>
     linesFromConfig(snapshot.values.shell_environment_include_only),
@@ -219,7 +219,7 @@ export function SettingsForm({ snapshot, onSnapshot }: SettingsFormProps): React
         ...(remoteClientContextDirty ? { wirebot: { remoteClientContext } } : {}),
       };
       const loaded = await requestSnapshot("PUT", body);
-      onSnapshot(loaded);
+      setSnapshot(loaded);
       setDraft(loaded.values);
       setEnvironmentText(linesFromConfig(loaded.values.shell_environment_include_only));
       setGranular(granularApprovalOf(loaded.values.approval_policy));
@@ -256,7 +256,7 @@ export function SettingsForm({ snapshot, onSnapshot }: SettingsFormProps): React
     setNotice(action === "reload" ? "Applying Codex changes…" : "Restarting Codex…");
     try {
       const runtime = await requestRuntime(action);
-      onSnapshot({ ...snapshot, runtime, writeOutcome: undefined });
+      setSnapshot({ ...snapshot, runtime, writeOutcome: undefined });
       setNotice(runtimeActionNotice(runtime, action));
       notifyHaptic(runtime.state === "degraded" || runtime.restartRequired ? "warning" : "success");
     } catch (error) {
