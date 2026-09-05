@@ -1,6 +1,7 @@
 import * as SwitchPrimitive from "@radix-ui/react-switch";
 import { LoaderCircle } from "lucide-react";
 import {
+  type AnchorHTMLAttributes,
   type ButtonHTMLAttributes,
   type ElementType,
   forwardRef,
@@ -55,22 +56,6 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     </button>
   );
 });
-
-interface AppRootProps extends HTMLAttributes<HTMLDivElement> {
-  readonly appearance: "dark" | "light";
-}
-
-export function AppRoot({ appearance, className, children, ...props }: AppRootProps): ReactElement {
-  return (
-    <div
-      className={cn("min-h-svh bg-background text-foreground", appearance, className)}
-      data-theme={appearance}
-      {...props}
-    >
-      {children}
-    </div>
-  );
-}
 
 interface SectionProps extends HTMLAttributes<HTMLElement> {
   readonly header?: ReactNode;
@@ -275,15 +260,16 @@ export function Headline({
 }
 
 interface TabbarProps extends HTMLAttributes<HTMLElement> {
+  readonly brand?: ReactNode;
   readonly children?: ReactNode;
 }
 
-interface TabbarItemProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+interface TabbarItemProps extends AnchorHTMLAttributes<HTMLAnchorElement> {
   readonly selected: boolean;
   readonly text: string;
 }
 
-function TabbarRoot({ className, children, ...props }: TabbarProps): ReactElement {
+function TabbarRoot({ className, children, brand, ...props }: TabbarProps): ReactElement {
   return (
     <nav
       className={cn(
@@ -292,7 +278,8 @@ function TabbarRoot({ className, children, ...props }: TabbarProps): ReactElemen
       )}
       {...props}
     >
-      <div className="mx-auto grid w-full max-w-md grid-cols-3 gap-1">{children}</div>
+      <div className="navBrand">{brand}</div>
+      <div className="navItems mx-auto grid w-full max-w-md grid-cols-3 gap-1">{children}</div>
     </nav>
   );
 }
@@ -305,8 +292,7 @@ function TabbarItem({
   ...props
 }: TabbarItemProps): ReactElement {
   return (
-    <button
-      type="button"
+    <a
       className={cn(
         "flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-xl border-0 bg-transparent text-xs font-medium text-muted-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
         selected && "bg-primary/10 text-primary",
@@ -317,7 +303,7 @@ function TabbarItem({
     >
       <span className="[&>svg]:size-6">{children}</span>
       <span>{text}</span>
-    </button>
+    </a>
   );
 }
 

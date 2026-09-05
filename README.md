@@ -88,15 +88,15 @@ docker compose pull && docker compose up -d
 
 State lives in the volume, so recreating the container is safe. [Watchtower](https://containrrr.dev/watchtower/) or your orchestrator can automate the pull. Images are tagged `latest` and `X.Y.Z` on GHCR; pin a version tag if you prefer explicit upgrades.
 
-### The settings Mini App URL
+### The web app URL
 
-To expose the authenticated settings Mini App, either set its public HTTPS origin:
+To expose the web app and Telegram Mini App, set a public HTTPS origin:
 
 ```dotenv
 PUBLIC_URL=https://codex.example.com
 ```
 
-and reverse-proxy that origin to the container's port 8787 (publish it in your compose file), or leave `PUBLIC_URL` unset: Wirebot then opens a [TryCloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/) using the bundled pinned cloudflared. Quick tunnels are best-effort — the URL changes on every start and Cloudflare offers no uptime guarantee — so set `PUBLIC_URL` for a persistent deployment. Set `WIREBOT_TUNNEL=off` to never open a tunnel; without a tunnel or `PUBLIC_URL`, Wirebot runs without the `/config` button. The Mini App validates signed Telegram `initData` against the allowlist regardless of how it is exposed.
+and reverse-proxy that origin to the container's port 8787 (publish it in your compose file), or leave `PUBLIC_URL` unset: Wirebot then opens a [TryCloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/) using the bundled pinned cloudflared. Quick tunnels are best-effort — the URL changes on every start and Cloudflare offers no uptime guarantee — so set `PUBLIC_URL` for a persistent deployment. Set `WIREBOT_TUNNEL=off` to never open a tunnel; without a tunnel or `PUBLIC_URL`, browser sign-in links and Telegram’s Settings button are unavailable, and Slack/Discord keep their in-chat settings picker. The HTTP app and health endpoint still run locally. The tunnel fallback works with any configured messenger, including Slack-only and Discord-only deployments.
 
 ### Configuration reference
 
@@ -146,6 +146,7 @@ Voice messages use that same ChatGPT subscription. Wirebot briefly shows a **Tra
 | `/status`    | Check app-server connectivity and the current Codex account.                                     |
 | `/login`     | Start Codex's ChatGPT device-code login in a private chat.                                       |
 | `/logout`    | Sign out through Codex in a private chat.                                                        |
+| `/web`      | Get a one-use link to sign in to the browser app (private chats, admins only).                     |
 | `/config`    | Open the authenticated settings Mini App in a private chat.                                      |
 | `/reload`    | Reload config, MCP servers, and skills through Codex's native app-server APIs.                   |
 | `/restart`   | Drain active work and safely restart only the Codex app-server.                                  |
@@ -163,7 +164,7 @@ Telegram's hosted Bot API only allows bots to download files up to 20 MB and upl
 
 Wirebot can additionally bridge Codex into Slack over [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode) — no public URL required. Direct messages stream progress like the Telegram private chat; in channels the bot answers mentions in threads, with each thread acting as its own Codex conversation. Approvals arrive as buttons, files flow in both directions, and commands are available as `/wirebot <subcommand>` (Slack reserves bare `/new`-style messages for its own slash-command system). Scheduled runs created from Slack notify back into the originating channel or thread.
 
-Set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_ALLOWED_USER_IDS` together to enable it. [docs/slack.md](docs/slack.md) walks through creating the Slack app from a pasteable manifest, collecting both tokens, and first steps. The settings Mini App stays Telegram-only because it authenticates through Telegram `initData`.
+Set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_ALLOWED_USER_IDS` together to enable it. [docs/slack.md](docs/slack.md) walks through creating the Slack app from a pasteable manifest, collecting both tokens, and first steps. Admins can open the full web app using `/wirebot config` or `/wirebot web` in a bot DM. No Telegram account is needed.
 
 ## Discord connector
 
@@ -198,9 +199,17 @@ The service must be running when work becomes due; this is not a cloud scheduler
 
 Wirebot's design rule is to use Codex's native app-server behavior instead of building a custom agent harness. The scheduled-runs engine is the one exception because Codex Desktop already implements scheduling in its host application rather than in Codex CLI. Wirebot mirrors that approach nearly 1:1: the host claims due work, applies foreground priority, persists run and notification state, and asks Codex to execute normal turns. As soon as Codex CLI or app-server provides native cron ownership, Wirebot will switch to it immediately and retire this engine.
 
-## Settings Mini App
+## Web app and Telegram Mini App
 
-The Mini App is pinned to the bot's **Settings** menu button when its public URL is available; `/config` remains an equivalent entry point. At startup Wirebot reconciles both Telegram's default button and each allowlisted private chat, so a stale chat-specific command-menu override cannot hide the Mini App. It uses source-owned UI components styled with Tailwind and accepts only signed Telegram `initData` from allowlisted private users. Its tab bar keeps **Settings** first, **Skills** second, and adds a **Schedules** screen for owner-scoped schedule management. The Skills screen lists every enabled skill from Codex's native `skills/list` response. Opening a skill shows its `SKILL.md` instructions and a read-only browser for bundled scripts, references, images, and other files. Skill paths remain confined to that skill's directory, and oversized files are not loaded into the browser.
+Open `https://your-wirebot-origin/app` in a normal browser. Settings, Skills, and Schedules also have bookmarkable URLs at `/app/settings`, `/app/skills`, and `/app/schedules`; `/` and the existing `/miniapp` URL work too. Desktop browsers use a left sidebar, while phones use bottom navigation. Browser colors follow the system light/dark preference, independently of Telegram. Mobile layouts support safe areas, dynamic viewport height, readable form controls, and pinch zoom.
+
+For browser sign-in, send `/wirebot web` (or `/wirebot config`) in a private Slack or Discord bot chat; Telegram users can send `/web`. The bot replies with a private, one-use link that expires in 5 minutes. Open it in your preferred browser. Requesting a new link invalidates your previous unused link. After signing in, ordinary URLs work for 12 hours, including across reloads and new tabs. **Sign out** revokes that browser session; restarting Wirebot invalidates all links and sessions.
+
+Browser access follows the connector's bot-admin policy, not Slack workspace or Discord server roles: `SLACK_ADMIN_USER_IDS` and `DISCORD_ADMIN_USER_IDS` restrict access when configured, and otherwise every authorized user is an admin. All Telegram allowlisted users are admins. The server rechecks authorization when issuing links, exchanging them, and using a session (Slack workspace membership uses its existing 10-minute cache). Link secrets live in URL fragments, are removed from the address bar on load, and are exchanged for Secure, HttpOnly, SameSite cookies. Serve the public app over HTTPS and keep login links private. Browser auth uses no Telegram SDK, localStorage, or third-party authentication service.
+
+Schedules retain the signed-in messenger identity: you see schedules owned by that account, and new schedules use the private conversation from which you requested the link. Accounts on different messengers are separate identities.
+
+The Mini App is pinned to the bot's **Settings** menu button when its public URL is available; `/config` remains an equivalent entry point. At startup Wirebot reconciles both Telegram's default button and each allowlisted private chat, so a stale chat-specific command-menu override cannot hide the Mini App. It uses source-owned UI components styled with Tailwind and authenticates Telegram launches using signed `initData` from allowlisted users. Its tab bar keeps **Settings** first, **Skills** second, and adds a **Schedules** screen for owner-scoped schedule management. The Skills screen lists every enabled skill from Codex's native `skills/list` response. Opening a skill shows its `SKILL.md` instructions and a read-only browser for bundled scripts, references, images, and other files. Skill paths remain confined to that skill's directory, and oversized files are not loaded into the browser.
 
 Inside Telegram, nested Mini App screens use the native header back button; ordinary browser
 rendering keeps the in-page back controls. Every multiline input can open a focused full-screen

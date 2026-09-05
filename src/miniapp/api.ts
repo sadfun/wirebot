@@ -1,6 +1,6 @@
 /**
  * Typed client for the Mini App HTTP API. Every request authenticates with
- * the Telegram init data and surfaces server-reported validation issues as
+ * signed Telegram init data or a browser session and surfaces server-reported validation issues as
  * ConfigApiError.
  */
 import type { ManagedSchedule } from "../automations/engine.js";
@@ -19,7 +19,7 @@ import type {
 import type { SkillResource } from "../codex/skill-browser.js";
 import type { WirebotSettings } from "../core/settings-store.js";
 import type { ConfigWriteResponse } from "../generated/codex/v2/ConfigWriteResponse.js";
-import { webApp } from "./telegram.js";
+import { telegramReady, webApp } from "./telegram.js";
 
 /** The `/api/config` wire shape; the client trusts the server's typed JSON as-is. */
 export type LoadedSnapshot = EditableConfigSnapshot & {
@@ -29,25 +29,30 @@ export type LoadedSnapshot = EditableConfigSnapshot & {
 };
 
 export class ConfigApiError extends Error {
+  public readonly status: number;
   public readonly issues: readonly ConfigValidationIssue[] | undefined;
 
-  public constructor(message: string, issues: readonly ConfigValidationIssue[] | undefined) {
+  public constructor(
+    message: string,
+    issues: readonly ConfigValidationIssue[] | undefined,
+    status = 0,
+  ) {
     super(message);
     this.name = "ConfigApiError";
     this.issues = issues;
+    this.status = status;
   }
 }
 
 async function requestJson(path: string, init: RequestInit): Promise<unknown> {
-  const initData = webApp?.initData;
-  if (initData === undefined || initData.length === 0) {
-    throw new Error("Telegram authorization is unavailable.");
-  }
   const hasBody = init.body !== undefined;
   const response = await fetch(path, {
     ...init,
+    credentials: "same-origin",
     headers: {
-      Authorization: `tma ${initData}`,
+      ...(telegramReady
+        ? { Authorization: `tma ${webApp?.initData}` }
+        : { "X-Wirebot-Request": "1" }),
       ...(hasBody ? { "Content-Type": "application/json" } : {}),
     },
   });
@@ -55,11 +60,20 @@ async function requestJson(path: string, init: RequestInit): Promise<unknown> {
   if (!response.ok) {
     const failure = value as {
       readonly error?: string;
+      readonly code?: string;
       readonly issues?: readonly ConfigValidationIssue[];
     };
+    if (
+      !telegramReady &&
+      (response.status === 401 || failure.code === "MINIAPP_FORBIDDEN") &&
+      !path.startsWith("/api/auth/")
+    ) {
+      window.dispatchEvent(new Event("wirebot:session-expired"));
+    }
     throw new ConfigApiError(
       failure.error ?? `Request failed (${response.status}).`,
       failure.issues,
+      response.status,
     );
   }
   return value;
@@ -169,4 +183,18 @@ export async function requestSkillResource(skill: string, path: string): Promise
   const query = new URLSearchParams({ skill, path });
   const value = await requestJson(`/api/skills/resource?${query.toString()}`, { method: "GET" });
   return value as SkillResource;
+}
+
+export async function requestSession(): Promise<{ readonly provider: string }> {
+  return (await requestJson("/api/auth/session", { method: "GET" })) as {
+    readonly provider: string;
+  };
+}
+
+export async function exchangeLogin(token: string): Promise<void> {
+  await requestJson("/api/auth/exchange", { method: "POST", body: JSON.stringify({ token }) });
+}
+
+export async function logoutBrowser(): Promise<void> {
+  await requestJson("/api/auth/logout", { method: "POST" });
 }

@@ -18,18 +18,24 @@ import { CodexRpcError } from "../codex/rpc.js";
 import type { CodexRuntimeService } from "../codex/runtime-service.js";
 import type { CodexService } from "../codex/service.js";
 import { SkillBrowserError } from "../codex/skill-browser.js";
-import type { ProviderReference } from "../core/channel.js";
 import type { WirebotSettingsStore } from "../core/settings-store.js";
 import type { GetAccountResponse } from "../generated/codex/v2/GetAccountResponse.js";
 import { BridgeError, errorMessage } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
-import { type TelegramInitDataUser, validateTelegramInitData } from "./auth.js";
+import { validateTelegramInitData } from "./auth.js";
+import { type AppPrincipal, type BrowserAuth, sessionLifetimeMs } from "./browser-auth.js";
 
 const MAX_REQUEST_BYTES = 32 * 1_024;
 const MAX_AUTH_AGE_SECONDS = 60 * 60;
 const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
 
 const staticAssets = new Map<string, readonly ["index.html" | "app.js" | "app.css", string]>([
+  ...["/", "/app", "/app/", "/app/settings", "/app/skills", "/app/schedules"].map(
+    (path): [string, readonly ["index.html", string]] => [
+      path,
+      ["index.html", "text/html; charset=utf-8"],
+    ],
+  ),
   ["/miniapp", ["index.html", "text/html; charset=utf-8"]],
   ["/miniapp/", ["index.html", "text/html; charset=utf-8"]],
   ["/miniapp/app.js", ["app.js", "text/javascript; charset=utf-8"]],
@@ -58,10 +64,11 @@ export interface MiniAppServerOptions {
     readonly botToken: string;
     readonly allowedUserIds: ReadonlySet<number>;
   };
+  readonly browserAuth?: BrowserAuth;
   readonly codex: Pick<CodexService, "account">;
-  readonly configService: CodexConfigService;
+  readonly configService: Pick<CodexConfigService, "read" | "update" | "validate">;
   readonly runtime: MiniAppRuntimeController;
-  readonly settings: WirebotSettingsStore;
+  readonly settings: Pick<WirebotSettingsStore, "read" | "update">;
   readonly logger: Logger;
   readonly assetDirectory?: string;
   readonly scheduledRuns?: MiniAppSchedulesController;
@@ -106,7 +113,7 @@ export class MiniAppServer {
       void this.handle(request, response).catch((error: unknown) => {
         this.options.logger.error("Mini App request failed", error, {
           method: request.method,
-          path: request.url,
+          path: new URL(request.url ?? "/", "http://localhost").pathname,
         });
         if (!response.headersSent) this.handleError(response, error);
         else response.destroy();
@@ -122,15 +129,13 @@ export class MiniAppServer {
     this.#scheduledRuns = controller;
   }
 
-  public async start(): Promise<void> {
-    if (this.#started) return;
-    if (this.options.telegramAuth !== undefined) {
-      await Promise.all([
-        access(join(this.#assetDirectory, "index.html")),
-        access(join(this.#assetDirectory, "app.js")),
-        access(join(this.#assetDirectory, "app.css")),
-      ]);
-    }
+  public async start(): Promise<URL> {
+    if (this.#started) return this.serverUrl();
+    await Promise.all([
+      access(join(this.#assetDirectory, "index.html")),
+      access(join(this.#assetDirectory, "app.js")),
+      access(join(this.#assetDirectory, "app.css")),
+    ]);
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error): void => {
         this.#server.off("listening", onListening);
@@ -150,8 +155,17 @@ export class MiniAppServer {
     this.#healthTimer.unref();
     this.options.logger.info("Wirebot HTTP server listening", {
       host: this.options.host,
-      port: this.options.port,
+      port: this.serverUrl().port,
     });
+    return this.serverUrl();
+  }
+
+  private serverUrl(): URL {
+    const address = this.#server.address();
+    if (address === null || typeof address === "string")
+      throw new Error("HTTP server is not listening");
+    const host = address.address.includes(":") ? `[${address.address}]` : address.address;
+    return new URL(`http://${host}:${address.port}`);
   }
 
   public async stop(): Promise<void> {
@@ -175,8 +189,62 @@ export class MiniAppServer {
       return;
     }
 
+    if (!url.pathname.startsWith("/api/")) {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        this.sendError(response, 405, "Method not allowed");
+        return;
+      }
+
+      const asset = staticAssets.get(url.pathname);
+      if (asset !== undefined) {
+        await this.sendAsset(response, request.method, asset[0], asset[1]);
+        return;
+      }
+
+      this.sendError(response, 404, "Not found");
+      return;
+    }
+
+    if (url.pathname === "/api/auth/exchange") {
+      this.requireBrowserRequest(request);
+      if (request.method !== "POST") {
+        this.methodNotAllowed(response, "POST");
+        return;
+      }
+      const { token } = z
+        .strictObject({ token: z.string().max(128) })
+        .parse(await this.readJson(request));
+      const session = await this.requireBrowserAuth().exchange(token);
+      this.options.browserAuth?.revoke(this.sessionCookie(request));
+      this.setSessionCookie(response, session);
+      this.sendJson(response, 200, { authenticated: true });
+      return;
+    }
+
+    if (url.pathname === "/api/auth/logout") {
+      this.requireBrowserRequest(request);
+      if (request.method !== "POST") {
+        this.methodNotAllowed(response, "POST");
+        return;
+      }
+      this.options.browserAuth?.revoke(this.sessionCookie(request));
+      this.setSessionCookie(response, "");
+      this.sendJson(response, 200, { authenticated: false });
+      return;
+    }
+
+    const scope = await this.authenticate(request);
+
+    if (url.pathname === "/api/auth/session") {
+      if (request.method !== "GET") {
+        this.methodNotAllowed(response, "GET");
+        return;
+      }
+      this.sendJson(response, 200, { provider: scope.owner.provider });
+      return;
+    }
+
     if (url.pathname === "/api/config/validate") {
-      this.authenticate(request);
       if (request.method === "POST") {
         const input = await this.readJson(request);
         this.sendJson(response, 200, await this.options.configService.validate(input));
@@ -187,7 +255,6 @@ export class MiniAppServer {
     }
 
     if (url.pathname === "/api/config") {
-      this.authenticate(request);
       if (request.method === "GET") {
         const snapshot = await this.options.configService.read();
         this.sendJson(response, 200, {
@@ -231,7 +298,6 @@ export class MiniAppServer {
     }
 
     if (url.pathname === "/api/skills") {
-      this.authenticate(request);
       if (request.method === "GET") {
         this.sendJson(response, 200, { skills: this.options.runtime.skills() });
         return;
@@ -241,7 +307,6 @@ export class MiniAppServer {
     }
 
     if (url.pathname === "/api/usage") {
-      this.authenticate(request);
       if (request.method === "GET") {
         this.sendJson(response, 200, await this.options.runtime.usageLimits());
         return;
@@ -251,7 +316,6 @@ export class MiniAppServer {
     }
 
     if (url.pathname === "/api/usage/reset") {
-      this.authenticate(request);
       if (request.method === "POST") {
         const input = applyBankedResetSchema.parse(await this.readJson(request));
         const outcome = await this.options.runtime.applyBankedReset(
@@ -266,7 +330,6 @@ export class MiniAppServer {
     }
 
     if (url.pathname === "/api/skills/resource") {
-      this.authenticate(request);
       if (request.method === "GET") {
         const skill = url.searchParams.get("skill");
         if (skill === null || skill.length === 0) {
@@ -281,9 +344,7 @@ export class MiniAppServer {
     }
 
     if (url.pathname === "/api/schedules" || url.pathname.startsWith("/api/schedules/")) {
-      const user = this.authenticate(request);
       const scheduledRuns = this.requireScheduledRuns();
-      const scope = telegramScheduleScope(user.id);
       if (url.pathname === "/api/schedules") {
         if (request.method === "GET") {
           this.sendJson(response, 200, { schedules: scheduledRuns.listForOwner(scope.owner) });
@@ -323,7 +384,6 @@ export class MiniAppServer {
     }
 
     if (url.pathname === "/api/runtime/reload" || url.pathname === "/api/runtime/restart") {
-      this.authenticate(request);
       if (request.method === "POST") {
         if (url.pathname.endsWith("/reload")) await this.options.runtime.reload();
         else await this.options.runtime.restart();
@@ -334,32 +394,61 @@ export class MiniAppServer {
       return;
     }
 
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      this.sendError(response, 405, "Method not allowed");
-      return;
-    }
-
-    const asset = staticAssets.get(url.pathname);
-    if (asset !== undefined && this.options.telegramAuth !== undefined) {
-      await this.sendAsset(response, request.method, asset[0], asset[1]);
-      return;
-    }
-
     this.sendError(response, 404, "Not found");
   }
 
-  private authenticate(request: IncomingMessage): TelegramInitDataUser {
-    const telegram = this.options.telegramAuth;
-    if (telegram === undefined) throw new HttpError(404, "Not found");
+  private async authenticate(request: IncomingMessage): Promise<AppPrincipal> {
     const authorization = request.headers.authorization;
-    if (authorization === undefined || !authorization.toLowerCase().startsWith("tma ")) {
-      throw new BridgeError("Telegram authorization is required", "MINIAPP_UNAUTHORIZED");
+    if (authorization !== undefined) {
+      const telegram = this.options.telegramAuth;
+      if (telegram === undefined || !authorization.toLowerCase().startsWith("tma ")) {
+        throw new BridgeError("Invalid authorization", "MINIAPP_UNAUTHORIZED");
+      }
+      const user = validateTelegramInitData(authorization.slice(4), {
+        botToken: telegram.botToken,
+        allowedUserIds: telegram.allowedUserIds,
+        maxAgeSeconds: MAX_AUTH_AGE_SECONDS,
+      });
+      return telegramScheduleScope(user.id);
     }
-    return validateTelegramInitData(authorization.slice(4), {
-      botToken: telegram.botToken,
-      allowedUserIds: telegram.allowedUserIds,
-      maxAgeSeconds: MAX_AUTH_AGE_SECONDS,
-    });
+    this.requireBrowserRequest(request);
+    return this.requireBrowserAuth().authenticate(this.sessionCookie(request));
+  }
+
+  private requireBrowserAuth(): BrowserAuth {
+    if (this.options.browserAuth === undefined) {
+      throw new BridgeError("Browser sign-in is unavailable", "MINIAPP_UNAUTHORIZED");
+    }
+    return this.options.browserAuth;
+  }
+
+  private requireBrowserRequest(request: IncomingMessage): void {
+    // A custom header requires a CORS preflight. This server never grants CORS,
+    // so another site cannot exchange credentials or mutate a cookie session.
+    if (
+      request.headers["x-wirebot-request"] !== "1" ||
+      request.headers["sec-fetch-site"] === "cross-site"
+    ) {
+      throw new BridgeError("Open Wirebot to continue", "MINIAPP_UNAUTHORIZED");
+    }
+  }
+
+  private sessionCookie(request: IncomingMessage): string {
+    const prefix = "__Host-wirebot_session=";
+    return (
+      request.headers.cookie
+        ?.split(";")
+        .map((part) => part.trim())
+        .find((part) => part.startsWith(prefix))
+        ?.slice(prefix.length) ?? ""
+    );
+  }
+
+  private setSessionCookie(response: ServerResponse, token: string): void {
+    response.setHeader(
+      "Set-Cookie",
+      `__Host-wirebot_session=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${token === "" ? 0 : sessionLifetimeMs / 1_000}`,
+    );
   }
 
   private refreshCodexHealth(): void {
@@ -505,11 +594,11 @@ export class MiniAppServer {
     if (error instanceof BridgeError) {
       if (error.code === "MINIAPP_UNAUTHORIZED") {
         response.setHeader("WWW-Authenticate", "tma");
-        this.sendError(response, 401, error.message);
+        this.sendJson(response, 401, { error: error.message, code: error.code });
         return;
       }
       if (error.code === "MINIAPP_FORBIDDEN") {
-        this.sendError(response, 403, error.message);
+        this.sendJson(response, 403, { error: error.message, code: error.code });
         return;
       }
       if (error.code === "SKILL_NOT_FOUND") {
@@ -540,11 +629,7 @@ function healthTimeout(): Promise<never> {
   });
 }
 
-function telegramScheduleScope(userId: number): Readonly<{
-  owner: ProviderReference;
-  conversation: ProviderReference;
-  deliveryTarget: ProviderReference;
-}> {
+function telegramScheduleScope(userId: number): AppPrincipal {
   return {
     owner: { provider: "telegram", resource: "user", id: String(userId) },
     conversation: {

@@ -12,7 +12,7 @@ import type {
 import { requestApplyBankedReset, requestUsage } from "./api.js";
 import { ConfirmDialog } from "./dialogs.js";
 import { isDefined, messageOf } from "./shared.js";
-import { notifyHaptic, telegramReady } from "./telegram.js";
+import { notifyHaptic } from "./telegram.js";
 import { Button, Caption, Section, Spinner } from "./ui.js";
 
 interface ResetConfirmation {
@@ -43,7 +43,6 @@ export function UsageSection(): ReactElement {
   }, []);
 
   useEffect(() => {
-    if (!telegramReady) return;
     void refreshUsage();
     const timer = window.setInterval(() => void refreshUsage(false), 60_000);
     return () => window.clearInterval(timer);

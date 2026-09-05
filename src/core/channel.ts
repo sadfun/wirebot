@@ -183,6 +183,8 @@ export interface MessagingChannel {
   readonly name: string;
   /** Re-check a persisted provider principal before unattended work executes. */
   isAuthorized(principal: ProviderReference): boolean | Promise<boolean>;
+  /** Re-check bot-admin access before issuing or using a browser session. Fail closed if absent. */
+  isAuthorizedAdmin?(principal: ProviderReference): boolean | Promise<boolean>;
   start(handler: MessageHandler): Promise<void>;
   publish(target: ProviderReference, message: OutboundMessage): Promise<DeliveryReceipt>;
   stop(): Promise<void>;

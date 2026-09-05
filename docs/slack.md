@@ -31,9 +31,9 @@ Wirebot validates and snapshots that file before uploading it with Slack's
 `files:write` permission. Local links used only as code references are not
 uploaded.
 
-The settings Mini App remains Telegram-only because it authenticates through
-Telegram. Everything else — including `/wirebot login` for the ChatGPT sign-in —
-works from Slack.
+The full web app works without Telegram. In a bot DM, `/wirebot config` or
+`/wirebot web` gives admins a one-use browser sign-in link (valid for 5 minutes).
+`/wirebot login` remains the separate ChatGPT sign-in command.
 
 ## 1. Create the Slack app
 
@@ -115,10 +115,11 @@ Open it to the whole workspace only if that is acceptable.
 
 Optionally, `SLACK_ADMIN_USER_IDS` (comma-separated member IDs) restricts
 instance-wide commands — `/wirebot config`, `login`, `logout`, `reload`, and
-`restart` — to the listed users. Unset, every authorized user may
-run them. `/wirebot config` opens interactive Codex settings built from Slack
-buttons (model, reasoning effort, speed tier, approvals, sandbox, web
-search) in the bot DM — the Slack counterpart of the Telegram Mini App.
+`restart`, plus browser sign-in with `web` — to the listed users. Unset, every authorized user may
+run them. `/wirebot config` opens the web app through a private sign-in link.
+Set `PUBLIC_URL` to an HTTPS origin or use the automatic quick tunnel. Without
+either, `/wirebot config` keeps the compact in-chat settings picker. Browser
+sessions last 12 hours and retain the Slack user identity for schedule ownership.
 
 ## 4. Configure Wirebot
 
@@ -132,8 +133,7 @@ SLACK_ALLOWED_USER_IDS=U0123ABCDEF,U0456GHIJKL
 
 All three must be set together; leaving them all unset keeps the connector
 disabled. Telegram is optional when Slack is configured — with only the Slack
-variables set, Wirebot runs Slack-only (the Telegram bot and the settings Mini
-App stay off). Restart Wirebot and check the log for
+variables set, Wirebot runs Slack-only with the same web app. Restart Wirebot and check the log for
 `Slack bot connected through Socket Mode`.
 
 ## 5. Talk to it

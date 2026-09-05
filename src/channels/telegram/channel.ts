@@ -216,6 +216,10 @@ export class TelegramChannel implements MessagingChannel {
     return Number.isSafeInteger(userId) && this.#allowedUserIds.has(userId);
   }
 
+  public async isAuthorizedAdmin(principal: ProviderReference): Promise<boolean> {
+    return await this.isAuthorized(principal);
+  }
+
   public async stop(): Promise<void> {
     await this.#runner?.stop();
     await this.#pendingChoices.declineAll("Request cancelled");

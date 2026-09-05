@@ -301,7 +301,7 @@ function renderFilePreview(file: SkillFile | undefined, error: string | undefine
   }
   return (
     <Caption className="binaryPreview">
-      This binary file can be browsed, but it cannot be previewed in the Mini App.
+      This binary file can be browsed, but it cannot be previewed here.
     </Caption>
   );
 }
