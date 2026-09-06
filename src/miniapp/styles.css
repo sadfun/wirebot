@@ -1611,7 +1611,6 @@ button {
   .browserApp .navBrand svg {
     width: 160px;
     height: auto;
-    color: var(--primary);
   }
   .browserApp .navBrand small {
     display: block;

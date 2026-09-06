@@ -166,7 +166,7 @@ export function SignIn({ error }: { readonly error: string | undefined }): React
           </div>
         }
       >
-        <WirebotLogo className="h-12 w-52 max-w-full text-primary" />
+        <WirebotLogo className="h-12 w-52 max-w-full" />
       </Placeholder>
     </main>
   );
