@@ -1,5 +1,5 @@
 /** Shared browser and Telegram application shell. */
-import { CalendarClock, LogOut, SlidersHorizontal, Sparkles, Terminal } from "lucide-react";
+import { CalendarClock, LogOut, SlidersHorizontal, Sparkles } from "lucide-react";
 import { type ReactElement, useEffect, useState } from "react";
 import { requestSnapshot } from "./api.js";
 import { SchedulesManager } from "./schedules.js";
@@ -101,7 +101,7 @@ export function SettingsApp({
         aria-label="Main navigation"
         brand={
           <>
-            <Terminal aria-hidden="true" />
+            <WirebotLogo />
             <span>
               Wirebot<small>Your Codex workspace</small>
             </span>
@@ -168,7 +168,7 @@ export function SignIn({ error }: { readonly error: string | undefined }): React
           </div>
         }
       >
-        <Terminal className="size-10 text-primary" aria-hidden="true" />
+        <WirebotLogo className="size-10 text-primary" />
       </Placeholder>
     </main>
   );
@@ -198,5 +198,20 @@ function SettingsLoading({
         </Placeholder>
       )}
     </div>
+  );
+}
+
+/** Robot mark from https://wirebot.ai/. */
+function WirebotLogo({ className }: { readonly className?: string }): ReactElement {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 248 319"
+      fill="currentColor"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M105 19 A19 19 0 1 1 143 19 A19 19 0 1 1 105 19 Z M117 31 H131 V79 H117 Z M0 195 A124 124 0 1 1 248 195 A124 124 0 1 1 0 195 Z M97 174 A15 15 0 0 0 67 174 V224 A15 15 0 0 0 97 224 Z M181 174 A15 15 0 0 0 151 174 V224 A15 15 0 0 0 181 224 Z" />
+    </svg>
   );
 }
