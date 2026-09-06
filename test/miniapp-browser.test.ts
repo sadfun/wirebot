@@ -35,10 +35,12 @@ describe("Browser HTTP app", () => {
       "/miniapp/",
       "/miniapp/app.js",
       "/miniapp/app.css",
+      "/favicon.ico",
     ]) {
       expect((await request(path)).status).toBe(200);
       expect((await request(path, { method: "HEAD" })).status).toBe(200);
     }
+    expect((await request("/favicon.ico")).headers.get("content-type")).toBe("image/x-icon");
     expect((await request("/app/unknown")).status).toBe(404);
     expect((await request("/app", { method: "POST" })).status).toBe(405);
     for (const path of [

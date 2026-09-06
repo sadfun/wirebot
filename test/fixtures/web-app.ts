@@ -64,7 +64,7 @@ export async function startTestApp(assetDirectory?: string, includeTelegram = fa
   const ownedDirectory = assetDirectory === undefined ? assets : undefined;
   if (ownedDirectory !== undefined) {
     await Promise.all(
-      ["index.html", "app.js", "app.css"].map((name) =>
+      ["index.html", "app.js", "app.css", "favicon.ico"].map((name) =>
         Bun.write(
           join(assets, name),
           name === "index.html" ? "<!doctype html><title>Wirebot</title>" : "",

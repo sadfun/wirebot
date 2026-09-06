@@ -11,7 +11,9 @@ const sourceDirectory = `${projectRoot}src/miniapp`;
 const outputDirectory = `${projectRoot}dist/miniapp/public`;
 
 await mkdir(outputDirectory, { recursive: true });
-await copyFile(`${sourceDirectory}/index.html`, `${outputDirectory}/index.html`);
+for (const name of ["index.html", "favicon.ico"]) {
+  await copyFile(`${sourceDirectory}/${name}`, `${outputDirectory}/${name}`);
+}
 
 const result = await Bun.build({
   entrypoints: [`${sourceDirectory}/client.tsx`],

@@ -29,13 +29,17 @@ const MAX_REQUEST_BYTES = 32 * 1_024;
 const MAX_AUTH_AGE_SECONDS = 60 * 60;
 const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
 
-const staticAssets = new Map<string, readonly ["index.html" | "app.js" | "app.css", string]>([
+const staticAssets = new Map<
+  string,
+  readonly ["index.html" | "app.js" | "app.css" | "favicon.ico", string]
+>([
   ...["/", "/app", "/app/", "/app/settings", "/app/skills", "/app/schedules"].map(
     (path): [string, readonly ["index.html", string]] => [
       path,
       ["index.html", "text/html; charset=utf-8"],
     ],
   ),
+  ["/favicon.ico", ["favicon.ico", "image/x-icon"]],
   ["/miniapp", ["index.html", "text/html; charset=utf-8"]],
   ["/miniapp/", ["index.html", "text/html; charset=utf-8"]],
   ["/miniapp/app.js", ["app.js", "text/javascript; charset=utf-8"]],
@@ -135,6 +139,7 @@ export class MiniAppServer {
       access(join(this.#assetDirectory, "index.html")),
       access(join(this.#assetDirectory, "app.js")),
       access(join(this.#assetDirectory, "app.css")),
+      access(join(this.#assetDirectory, "favicon.ico")),
     ]);
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error): void => {
@@ -503,7 +508,7 @@ export class MiniAppServer {
   private async sendAsset(
     response: ServerResponse,
     method: string,
-    name: "index.html" | "app.js" | "app.css",
+    name: "index.html" | "app.js" | "app.css" | "favicon.ico",
     contentType: string,
   ): Promise<void> {
     // Build outputs never change while the process runs; serve them from memory.
