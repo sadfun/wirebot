@@ -26,26 +26,26 @@
 :root {
   color-scheme: light;
   --radius: 0.875rem;
-  --background: #f5f7fb;
-  --foreground: #172337;
+  --background: #f5f2ec;
+  --foreground: #171717;
   --card: #ffffff;
   --card-foreground: var(--foreground);
-  --primary: #285bd4;
+  --primary: #126bdd;
   --primary-foreground: #ffffff;
-  --secondary: #eaf0fa;
-  --secondary-foreground: #253b60;
-  --muted: #edf1f7;
-  --muted-foreground: #5d6c81;
-  --accent: #e9effb;
+  --secondary: #e8e5df;
+  --secondary-foreground: #242424;
+  --muted: #eae7e1;
+  --muted-foreground: #66635f;
+  --accent: #e8e5df;
   --accent-foreground: var(--foreground);
   --destructive: #c32e3d;
   --destructive-foreground: #ffffff;
   --switch-thumb: #ffffff;
-  --border: #dce3ee;
-  --input: #c7d2e2;
+  --border: #d7d3cc;
+  --input: #b8b3aa;
   --ring: var(--primary);
-  --section-header: #5d6c81;
-  --tabbar-background: #ffffff;
+  --section-header: #66635f;
+  --tabbar-background: #efede7;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -54,22 +54,22 @@
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --background: #10141c;
-    --foreground: #e5ebf5;
-    --card: #191f2b;
-    --primary: #90b4ff;
-    --primary-foreground: #122544;
-    --secondary: #263248;
-    --secondary-foreground: #d9e5ff;
-    --muted: #242d3c;
-    --muted-foreground: #a0aec3;
-    --accent: #293650;
+    --background: #171717;
+    --foreground: #f5f2ec;
+    --card: #202020;
+    --primary: #1e83ff;
+    --primary-foreground: #ffffff;
+    --secondary: #2e2e2e;
+    --secondary-foreground: #f5f2ec;
+    --muted: #2a2a2a;
+    --muted-foreground: #b4b2ad;
+    --accent: #303030;
     --destructive: #ff8793;
     --destructive-foreground: #35151a;
-    --border: #303c50;
-    --input: #42516a;
-    --section-header: #a0aec3;
-    --tabbar-background: #191f2b;
+    --border: #4e4e4e;
+    --input: #5b5b5b;
+    --section-header: #b4b2ad;
+    --tabbar-background: #171717;
   }
 }
 
@@ -1542,6 +1542,39 @@ button {
   min-height: 100dvh;
 }
 
+/* Website palette and shapes, with system typography and accessible button contrast. */
+.browserApp .ui-button,
+.browserApp .navItems a {
+  border-radius: 999px;
+}
+.browserApp .ui-button.bg-primary {
+  background: color-mix(in srgb, var(--primary) 85%, black);
+}
+.browserApp .navItems a:is(:hover, [aria-current="page"]) {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.browserApp .ui-section-body,
+.browserApp .scheduleCard,
+.browserApp .resetDialog,
+.browserApp .loadingRoot > div {
+  border-radius: 9px;
+  box-shadow: none;
+}
+.browserApp .nativeControl {
+  border-radius: 9px;
+}
+.browserApp .pageHeader {
+  padding-bottom: 28px;
+}
+.browserApp .pageHeader h1 {
+  font-size: clamp(1.75rem, 4vw, 2.25rem);
+  letter-spacing: -0.035em;
+}
+.browserApp .sectionStack {
+  gap: 28px;
+}
+
 .browserHeader {
   display: flex;
   justify-content: space-between;
@@ -1602,24 +1635,12 @@ button {
     border-right: 1px solid var(--border);
   }
   .browserApp .navBrand {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+    display: block;
     padding: 0 12px 36px;
-    font-size: 1.2rem;
-    font-weight: 700;
   }
   .browserApp .navBrand svg {
-    width: 32px;
-    height: 32px;
-    color: var(--primary);
-  }
-  .browserApp .navBrand small {
-    display: block;
-    margin-top: 3px;
-    font-size: 0.7rem;
-    font-weight: 400;
-    color: var(--muted-foreground);
+    width: 160px;
+    height: auto;
   }
   .browserApp .navItems {
     display: flex;
