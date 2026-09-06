@@ -97,15 +97,7 @@ export function SettingsApp({
           <SchedulesManager />
         )}
       </main>
-      <Tabbar
-        aria-label="Main navigation"
-        brand={
-          <>
-            <WirebotLogo />
-            <small>Your Codex workspace</small>
-          </>
-        }
-      >
+      <Tabbar aria-label="Main navigation" brand={<WirebotLogo />}>
         {tabs.map(({ id, label, icon: Icon }) => (
           <Tabbar.Item
             key={id}

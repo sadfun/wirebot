@@ -1635,22 +1635,12 @@ button {
     border-right: 1px solid var(--border);
   }
   .browserApp .navBrand {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 6px;
+    display: block;
     padding: 0 12px 36px;
   }
   .browserApp .navBrand svg {
     width: 160px;
     height: auto;
-  }
-  .browserApp .navBrand small {
-    display: block;
-    margin-top: 3px;
-    font-size: 0.7rem;
-    font-weight: 400;
-    color: var(--muted-foreground);
   }
   .browserApp .navItems {
     display: flex;
