@@ -107,7 +107,7 @@ export class MiniAppServer {
   readonly #assetDirectory: string;
   readonly #assetCache = new Map<string, Buffer>();
   #scheduledRuns: MiniAppSchedulesController | undefined;
-  #messageHandler: ((scope: AppPrincipal, message: string) => Promise<void>) | undefined;
+  #messageHandler: ((input: unknown) => Promise<void>) | undefined;
   #codexHealth: CodexHealth = "starting";
   #healthRefresh: Promise<void> | undefined;
   #healthTimer: NodeJS.Timeout | undefined;
@@ -139,7 +139,7 @@ export class MiniAppServer {
     this.#scheduledRuns = controller;
   }
 
-  public setMessageHandler(handler: (scope: AppPrincipal, message: string) => Promise<void>): void {
+  public setMessageHandler(handler: (input: unknown) => Promise<void>): void {
     this.#messageHandler = handler;
   }
 
@@ -253,24 +253,21 @@ export class MiniAppServer {
       return;
     }
 
-    const scope = await this.authenticate(request);
-
     if (url.pathname === "/api/messages") {
       if (request.method !== "POST") {
         this.methodNotAllowed(response, "POST");
         return;
       }
-      const { message } = z
-        .strictObject({ message: z.string().trim().min(1).max(20_000) })
-        .parse(await this.readJson(request));
       if (this.#messageHandler === undefined) {
         this.sendError(response, 503, "Messaging unavailable");
         return;
       }
-      await this.#messageHandler(scope, message);
+      await this.#messageHandler(await this.readJson(request, 16 * 1024 * 1024));
       this.sendJson(response, 202, { accepted: true });
       return;
     }
+
+    const scope = await this.authenticate(request);
 
     if (url.pathname === "/api/auth/session") {
       if (request.method !== "GET") {
@@ -438,9 +435,6 @@ export class MiniAppServer {
 
   private async authenticate(request: IncomingMessage): Promise<AppPrincipal> {
     const authorization = request.headers.authorization;
-    if (authorization?.startsWith("Bearer ")) {
-      return this.requireBrowserAuth().authenticate(authorization.slice(7));
-    }
     if (authorization !== undefined) {
       const telegram = this.options.telegramAuth;
       if (telegram === undefined || !authorization.toLowerCase().startsWith("tma ")) {
@@ -522,7 +516,10 @@ export class MiniAppServer {
     return this.#scheduledRuns;
   }
 
-  private async readJson(request: IncomingMessage): Promise<unknown> {
+  private async readJson(
+    request: IncomingMessage,
+    maximumBytes = MAX_REQUEST_BYTES,
+  ): Promise<unknown> {
     const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
     if (contentType !== "application/json") {
       throw new HttpError(415, "Content-Type must be application/json");
@@ -532,7 +529,7 @@ export class MiniAppServer {
     for await (const chunk of request) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
       size += buffer.byteLength;
-      if (size > MAX_REQUEST_BYTES) throw new HttpError(413, "Request body is too large");
+      if (size > maximumBytes) throw new HttpError(413, "Request body is too large");
       chunks.push(buffer);
     }
     try {
@@ -634,6 +631,19 @@ export class MiniAppServer {
       return;
     }
     if (error instanceof BridgeError) {
+      if (error.code === "MESSAGE_TOKEN_INVALID") {
+        this.sendError(response, 401, "Invalid or revoked message token");
+        return;
+      }
+      if (error.code === "MESSAGE_OWNER_REVOKED") {
+        this.sendError(response, 403, "Message access revoked");
+        return;
+      }
+      if (error.code === "MESSAGE_INVALID") {
+        this.sendError(response, 400, error.message);
+        return;
+      }
+
       if (error.code === "MINIAPP_UNAUTHORIZED") {
         response.setHeader("WWW-Authenticate", "tma");
         this.sendJson(response, 401, { error: error.message, code: error.code });

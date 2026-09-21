@@ -14,6 +14,7 @@ import { CodexBridge } from "./core/bridge.js";
 import type { MessagingChannel } from "./core/channel.js";
 import { ConversationStore } from "./core/conversation-store.js";
 import { WirebotSettingsStore } from "./core/settings-store.js";
+import { ThreadMessages } from "./core/thread-messages.js";
 import { WirebotMcpServer } from "./mcp/server.js";
 import { BrowserAuth } from "./miniapp/browser-auth.js";
 import { MiniAppServer } from "./miniapp/server.js";
@@ -261,32 +262,15 @@ export async function runWirebot(): Promise<void> {
       scheduledRuns,
       browserAuth,
     );
-    miniApp.setMessageHandler(async (scope, text) => {
-      if (conversations.get(scope.conversation.id) === undefined) {
-        throw new Error("Conversation has no existing Codex task");
-      }
-      const channel = authChannels.get(scope.owner.provider);
-      if (channel?.createResponder === undefined)
-        throw new Error("Messaging connector unavailable");
-      const responder = await channel.createResponder(scope.deliveryTarget, scope.owner);
-      void bridge
-        .handleMessage({
-          id: `api:${crypto.randomUUID()}`,
-          address: {
-            channel: scope.conversation.provider,
-            key: scope.conversation.id,
-            isPrivate: true,
-            isGuest: false,
-            deliveryTarget: scope.deliveryTarget,
-          },
-          sender: { id: scope.owner.id, displayName: scope.owner.id },
-          text,
-          attachments: [],
-          isAdmin: true,
-          responder,
-        })
-        .catch((error: unknown) => logger.error("API message failed", error));
+    const messages = new ThreadMessages({
+      path: join(config.dataDirectory, "message-tokens.json"),
+      workspace: config.workspace,
+      codex,
+      channels,
+      logger: logger.child({ component: "thread-messages" }),
     });
+    await messages.load();
+    miniApp.setMessageHandler((input) => messages.submit(input));
     for (const channel of channels) {
       resources.push(channel);
       await channel.start(bridge.handleMessage);
