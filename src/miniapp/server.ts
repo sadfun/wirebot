@@ -101,12 +101,17 @@ export type MiniAppSchedulesController = Pick<
   "listForOwner" | "createForOwner" | "updateForOwner" | "deleteForOwner"
 >;
 
+interface GithubWebhookController {
+  handle(id: string, request: IncomingMessage, response: ServerResponse): Promise<void>;
+}
+
 export class MiniAppServer {
   private readonly options: MiniAppServerOptions;
   readonly #server: Server;
   readonly #assetDirectory: string;
   readonly #assetCache = new Map<string, Buffer>();
   #scheduledRuns: MiniAppSchedulesController | undefined;
+  #githubWebhooks: GithubWebhookController | undefined;
   #codexHealth: CodexHealth = "starting";
   #healthRefresh: Promise<void> | undefined;
   #healthTimer: NodeJS.Timeout | undefined;
@@ -136,6 +141,10 @@ export class MiniAppServer {
       throw new Error("The Mini App scheduler controller is already connected");
     }
     this.#scheduledRuns = controller;
+  }
+
+  public setGithubWebhooks(controller: GithubWebhookController): void {
+    this.#githubWebhooks = controller;
   }
 
   public async start(): Promise<URL> {
@@ -193,6 +202,12 @@ export class MiniAppServer {
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     this.setSecurityHeaders(response);
     const url = new URL(request.url ?? "/", "http://localhost");
+
+    const githubHook = /^\/api\/hooks\/github\/([a-zA-Z0-9_-]{1,80})$/.exec(url.pathname);
+    if (githubHook?.[1] !== undefined && this.#githubWebhooks !== undefined) {
+      await this.#githubWebhooks.handle(githubHook[1], request, response);
+      return;
+    }
 
     if (request.method === "GET" && url.pathname === "/healthz") {
       this.sendJson(response, 200, {
