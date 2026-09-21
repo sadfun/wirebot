@@ -13,6 +13,7 @@ import { loadAppConfig } from "./config/env.js";
 import { CodexBridge } from "./core/bridge.js";
 import type { MessagingChannel } from "./core/channel.js";
 import { ConversationStore } from "./core/conversation-store.js";
+import { ConversationTriggers } from "./core/conversation-triggers.js";
 import { WirebotSettingsStore } from "./core/settings-store.js";
 import { WirebotMcpServer } from "./mcp/server.js";
 import { BrowserAuth } from "./miniapp/browser-auth.js";
@@ -25,7 +26,6 @@ import { Logger } from "./shared/logger.js";
 import { wirebotVersion } from "./shared/version.js";
 import { ChatGptVoiceTranscriber } from "./transcription/service.js";
 import { CurlImpersonateTransport } from "./transcription/transport.js";
-import { GithubWebhooks } from "./webhooks/github.js";
 
 /**
  * Inside the Wirebot container the container boundary is the sandbox, and the
@@ -246,13 +246,12 @@ export async function runWirebot(): Promise<void> {
       (channel): channel is NonNullable<typeof channel> => channel !== undefined,
     );
     for (const channel of channels) authChannels.set(channel.name, channel);
-    const githubWebhooks = await GithubWebhooks.load({
+    const conversationTriggers = await ConversationTriggers.load({
       directory: config.dataDirectory,
       codex,
       channels,
-      logger: logger.child({ component: "github-webhooks" }),
     });
-    miniApp.setGithubWebhooks(githubWebhooks);
+    miniApp.setConversationTriggers(conversationTriggers);
     const scheduledRuns = new ScheduledRunsEngine({
       store: automations,
       codex,
@@ -275,8 +274,6 @@ export async function runWirebot(): Promise<void> {
     }
     resources.push(scheduledRuns);
     await scheduledRuns.start();
-    resources.push(githubWebhooks);
-    await githubWebhooks.start();
 
     logger.info("Wirebot is ready", {
       version: wirebotVersion,

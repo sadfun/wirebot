@@ -101,7 +101,7 @@ export type MiniAppSchedulesController = Pick<
   "listForOwner" | "createForOwner" | "updateForOwner" | "deleteForOwner"
 >;
 
-interface GithubWebhookController {
+interface ConversationTriggerController {
   handle(id: string, request: IncomingMessage, response: ServerResponse): Promise<void>;
 }
 
@@ -111,7 +111,7 @@ export class MiniAppServer {
   readonly #assetDirectory: string;
   readonly #assetCache = new Map<string, Buffer>();
   #scheduledRuns: MiniAppSchedulesController | undefined;
-  #githubWebhooks: GithubWebhookController | undefined;
+  #conversationTriggers: ConversationTriggerController | undefined;
   #codexHealth: CodexHealth = "starting";
   #healthRefresh: Promise<void> | undefined;
   #healthTimer: NodeJS.Timeout | undefined;
@@ -143,8 +143,8 @@ export class MiniAppServer {
     this.#scheduledRuns = controller;
   }
 
-  public setGithubWebhooks(controller: GithubWebhookController): void {
-    this.#githubWebhooks = controller;
+  public setConversationTriggers(controller: ConversationTriggerController): void {
+    this.#conversationTriggers = controller;
   }
 
   public async start(): Promise<URL> {
@@ -203,9 +203,9 @@ export class MiniAppServer {
     this.setSecurityHeaders(response);
     const url = new URL(request.url ?? "/", "http://localhost");
 
-    const githubHook = /^\/api\/hooks\/github\/([a-zA-Z0-9_-]{1,80})$/.exec(url.pathname);
-    if (githubHook?.[1] !== undefined && this.#githubWebhooks !== undefined) {
-      await this.#githubWebhooks.handle(githubHook[1], request, response);
+    const trigger = /^\/api\/triggers\/([a-zA-Z0-9_-]{1,80})$/.exec(url.pathname);
+    if (trigger?.[1] !== undefined && this.#conversationTriggers !== undefined) {
+      await this.#conversationTriggers.handle(trigger[1], request, response);
       return;
     }
 
