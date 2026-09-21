@@ -14,6 +14,7 @@ import { CodexBridge } from "./core/bridge.js";
 import type { MessagingChannel } from "./core/channel.js";
 import { ConversationStore } from "./core/conversation-store.js";
 import { WirebotSettingsStore } from "./core/settings-store.js";
+import { ThreadMessages } from "./core/thread-messages.js";
 import { WirebotMcpServer } from "./mcp/server.js";
 import { BrowserAuth } from "./miniapp/browser-auth.js";
 import { MiniAppServer } from "./miniapp/server.js";
@@ -261,6 +262,15 @@ export async function runWirebot(): Promise<void> {
       scheduledRuns,
       browserAuth,
     );
+    const messages = new ThreadMessages({
+      path: join(config.dataDirectory, "message-tokens.json"),
+      workspace: config.workspace,
+      codex,
+      channels,
+      logger: logger.child({ component: "thread-messages" }),
+    });
+    await messages.load();
+    miniApp.setMessageHandler((input) => messages.submit(input));
     for (const channel of channels) {
       resources.push(channel);
       await channel.start(bridge.handleMessage);

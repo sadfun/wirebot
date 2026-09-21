@@ -178,6 +178,18 @@ export class DiscordChannel implements MessagingChannel {
     return (await this.isAuthorized(principal)) && this.isAdmin(principal.id);
   }
 
+  public async createResponder(
+    targetReference: ProviderReference,
+    owner: ProviderReference,
+  ): Promise<DiscordResponder> {
+    return this.responder(
+      parseDiscordDeliveryTarget(targetReference),
+      owner.id,
+      undefined,
+      owner.id,
+    );
+  }
+
   public async publish(
     targetReference: ProviderReference,
     message: OutboundMessage,

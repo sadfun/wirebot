@@ -304,6 +304,21 @@ export class SlackChannel implements MessagingChannel {
     await this.#pendingChoices.declineAll("Request cancelled");
   }
 
+  public async createResponder(
+    targetReference: ProviderReference,
+    owner: ProviderReference,
+  ): Promise<SlackResponder> {
+    const target = parseSlackDeliveryTarget(targetReference);
+    return new SlackResponder(
+      this.#api,
+      target.channel,
+      target.threadTs,
+      owner.id,
+      this.requestChoice,
+      this.#logger,
+    );
+  }
+
   public async publish(
     targetReference: ProviderReference,
     message: OutboundMessage,

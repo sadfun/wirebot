@@ -226,6 +226,22 @@ export class TelegramChannel implements MessagingChannel {
     await this.#pendingChoices.declineAll("Request cancelled");
   }
 
+  public async createResponder(
+    targetReference: ProviderReference,
+    owner: ProviderReference,
+  ): Promise<TelegramResponder> {
+    const target = parseTelegramDeliveryTarget(targetReference);
+    const chat = await this.#bot.api.getChat(target.chatId);
+    return new TelegramResponder(
+      this.#bot.api,
+      chat,
+      { destination: target.destination },
+      Number(owner.id),
+      this.requestChoice,
+      this.#logger,
+    );
+  }
+
   public async publish(
     targetReference: ProviderReference,
     message: OutboundMessage,
