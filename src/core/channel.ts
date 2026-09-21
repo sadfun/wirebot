@@ -183,6 +183,8 @@ export function channelTraits(channel: string): ChannelTraits {
 
 export interface MessagingChannel {
   readonly name: string;
+  /** Reuse the connector's normal reply/approval UI for an authenticated API message. */
+  createResponder?(target: ProviderReference, owner: ProviderReference): Promise<MessageResponder>;
   /** Re-check a persisted provider principal before unattended work executes. */
   isAuthorized(principal: ProviderReference): boolean | Promise<boolean>;
   /** Re-check bot-admin access before issuing or using a browser session. Fail closed if absent. */

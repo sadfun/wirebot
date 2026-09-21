@@ -101,17 +101,13 @@ export type MiniAppSchedulesController = Pick<
   "listForOwner" | "createForOwner" | "updateForOwner" | "deleteForOwner"
 >;
 
-interface ConversationTriggerController {
-  handle(id: string, request: IncomingMessage, response: ServerResponse): Promise<void>;
-}
-
 export class MiniAppServer {
   private readonly options: MiniAppServerOptions;
   readonly #server: Server;
   readonly #assetDirectory: string;
   readonly #assetCache = new Map<string, Buffer>();
   #scheduledRuns: MiniAppSchedulesController | undefined;
-  #conversationTriggers: ConversationTriggerController | undefined;
+  #messageHandler: ((scope: AppPrincipal, message: string) => Promise<void>) | undefined;
   #codexHealth: CodexHealth = "starting";
   #healthRefresh: Promise<void> | undefined;
   #healthTimer: NodeJS.Timeout | undefined;
@@ -143,8 +139,8 @@ export class MiniAppServer {
     this.#scheduledRuns = controller;
   }
 
-  public setConversationTriggers(controller: ConversationTriggerController): void {
-    this.#conversationTriggers = controller;
+  public setMessageHandler(handler: (scope: AppPrincipal, message: string) => Promise<void>): void {
+    this.#messageHandler = handler;
   }
 
   public async start(): Promise<URL> {
@@ -203,12 +199,6 @@ export class MiniAppServer {
     this.setSecurityHeaders(response);
     const url = new URL(request.url ?? "/", "http://localhost");
 
-    const trigger = /^\/api\/triggers\/([a-zA-Z0-9_-]{1,80})$/.exec(url.pathname);
-    if (trigger?.[1] !== undefined && this.#conversationTriggers !== undefined) {
-      await this.#conversationTriggers.handle(trigger[1], request, response);
-      return;
-    }
-
     if (request.method === "GET" && url.pathname === "/healthz") {
       this.sendJson(response, 200, {
         ok: true,
@@ -264,6 +254,23 @@ export class MiniAppServer {
     }
 
     const scope = await this.authenticate(request);
+
+    if (url.pathname === "/api/messages") {
+      if (request.method !== "POST") {
+        this.methodNotAllowed(response, "POST");
+        return;
+      }
+      const { message } = z
+        .strictObject({ message: z.string().trim().min(1).max(20_000) })
+        .parse(await this.readJson(request));
+      if (this.#messageHandler === undefined) {
+        this.sendError(response, 503, "Messaging unavailable");
+        return;
+      }
+      await this.#messageHandler(scope, message);
+      this.sendJson(response, 202, { accepted: true });
+      return;
+    }
 
     if (url.pathname === "/api/auth/session") {
       if (request.method !== "GET") {
@@ -431,6 +438,9 @@ export class MiniAppServer {
 
   private async authenticate(request: IncomingMessage): Promise<AppPrincipal> {
     const authorization = request.headers.authorization;
+    if (authorization?.startsWith("Bearer ")) {
+      return this.requireBrowserAuth().authenticate(authorization.slice(7));
+    }
     if (authorization !== undefined) {
       const telegram = this.options.telegramAuth;
       if (telegram === undefined || !authorization.toLowerCase().startsWith("tma ")) {
