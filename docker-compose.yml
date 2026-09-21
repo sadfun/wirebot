@@ -5,6 +5,10 @@ services:
     # Configure Telegram, Slack, Discord, or any combination; see .env.example for connector and
     # runtime variables (PUBLIC_URL, WIREBOT_TUNNEL, and others).
     env_file: .env
+    # Playwright's Docker seccomp profile adds only the namespace syscalls that
+    # Chromium's process sandbox needs to Docker's normal syscall allowlist.
+    security_opt:
+      - seccomp=./docker/playwright.seccomp
     volumes:
       # One volume holds all user state: the Codex workspace and login, the
       # agent home directory, /usr/local, and an optional Homebrew prefix.
