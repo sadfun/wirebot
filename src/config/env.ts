@@ -31,6 +31,12 @@ const envSchema = z.object({
   HOST: z.string().min(1).default("127.0.0.1"),
   PORT: z.coerce.number().int().min(1).max(65_535).default(8787),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  WIREBOT_JEV_API_KEY: z.string().min(1).optional(),
+  WIREBOT_JEV_MODEL: z.string().min(1).default("~typesafe/jev-latest"),
+  WIREBOT_JEV_ENDPOINT: z.url().default("https://openrouter.ai/api/alpha/decisions"),
+  WIREBOT_JEV_EFFORT: z.enum(["auto", "off"]).default("auto"),
+  WIREBOT_JEV_FAST: z.enum(["auto", "off"]).default("off"),
+  WIREBOT_JEV_FAST_TIER: z.string().min(1).default("fast"),
 });
 
 /**
@@ -55,6 +61,7 @@ export const bridgeOnlyEnvironmentKeys: ReadonlySet<keyof z.infer<typeof envSche
   "TELEGRAM_API_BASE",
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_POLL_TIMEOUT",
+  "WIREBOT_JEV_API_KEY",
 ] as const);
 
 export interface ChatgptAuthConfig {
@@ -85,6 +92,18 @@ export interface DiscordConfig {
   readonly adminUserIds: ReadonlySet<string> | undefined;
 }
 
+/** Jev turn routing through OpenRouter; present only when an API key is set. */
+export interface JevConfig {
+  readonly apiKey: string;
+  readonly model: string;
+  readonly endpoint: string;
+  /** Let Jev choose the reasoning effort for each user turn. */
+  readonly effort: boolean;
+  /** Let Jev choose per turn whether to use the fast service tier. */
+  readonly fast: boolean;
+  readonly fastTier: string;
+}
+
 export interface AppConfig {
   readonly telegram: TelegramConfig | undefined;
   readonly telegramApiBase: string;
@@ -103,6 +122,7 @@ export interface AppConfig {
   readonly host: string;
   readonly port: number;
   readonly logLevel: LogLevel;
+  readonly jev: JevConfig | undefined;
 }
 
 export function loadAppConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -142,6 +162,26 @@ export function loadAppConfig(environment: NodeJS.ProcessEnv = process.env): App
     host: parsed.HOST,
     port: parsed.PORT,
     logLevel: parsed.LOG_LEVEL,
+    jev: jevConfigFromParsed(parsed),
+  };
+}
+
+function jevConfigFromParsed(parsed: z.infer<typeof envSchema>): JevConfig | undefined {
+  if (parsed.WIREBOT_JEV_API_KEY === undefined) return undefined;
+  const effort = parsed.WIREBOT_JEV_EFFORT === "auto";
+  const fast = parsed.WIREBOT_JEV_FAST === "auto";
+  if (!effort && !fast) {
+    throw new Error(
+      "WIREBOT_JEV_API_KEY is set but both WIREBOT_JEV_EFFORT and WIREBOT_JEV_FAST are off; unset the key or enable one of them",
+    );
+  }
+  return {
+    apiKey: parsed.WIREBOT_JEV_API_KEY,
+    model: parsed.WIREBOT_JEV_MODEL,
+    endpoint: parsed.WIREBOT_JEV_ENDPOINT,
+    effort,
+    fast,
+    fastTier: parsed.WIREBOT_JEV_FAST_TIER,
   };
 }
 

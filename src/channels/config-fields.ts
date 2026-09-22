@@ -1,7 +1,7 @@
 import {
   ConfigValidationError,
   type EditableConfigSnapshot,
-  type ModelCapability,
+  selectedModel,
 } from "../codex/config-service.js";
 import { errorMessage } from "../shared/errors.js";
 
@@ -58,7 +58,7 @@ export function fieldOptions(
   snapshot: EditableConfigSnapshot,
   field: ConfigFieldKey,
 ): FieldOption[] {
-  const model = currentModel(snapshot);
+  const model = selectedModel(snapshot);
   switch (field) {
     case "model":
       return snapshot.capabilities.models.map((candidate) => ({
@@ -190,14 +190,4 @@ export async function applyConfigValue(
       ? `⚠️ ${error.issues.map((issue) => issue.message).join(" ") || "The change was rejected."}`
       : `⚠️ ${errorMessage(error)}`;
   }
-}
-
-function currentModel(snapshot: EditableConfigSnapshot): ModelCapability | undefined {
-  const selected = snapshot.values.model;
-  const models = snapshot.capabilities.models;
-  if (selected !== null) {
-    const match = models.find((model) => model.model === selected);
-    if (match !== undefined) return match;
-  }
-  return models.find((model) => model.isDefault) ?? models[0];
 }

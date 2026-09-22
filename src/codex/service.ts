@@ -135,6 +135,7 @@ type CodexTurnSettings = Readonly<
     | "sandboxPolicy"
     | "model"
     | "serviceTier"
+    | "serviceTierForTurn"
     | "effort"
     | "summary"
     | "personality"
@@ -154,9 +155,32 @@ type ExplicitSkillInputProvider = (
   text: string,
 ) => readonly ExplicitSkillInput[] | Promise<readonly ExplicitSkillInput[]>;
 
+/** What a turn router learns about a user message before the turn starts. */
+export interface TurnRoutingRequest {
+  readonly conversationKey: string;
+  readonly connector: string;
+  /** Message text after voice transcription. */
+  readonly text: string;
+  /** True when this message starts a new Codex thread. */
+  readonly newThread: boolean;
+  readonly attachmentCount: number;
+}
+
+/** Per-turn overrides layered over the configured turn settings. */
+export interface TurnRoutingDecision {
+  readonly effort?: string;
+  readonly serviceTierForTurn?: string;
+}
+
+type TurnRoutingProvider = (
+  request: TurnRoutingRequest,
+) => TurnRoutingDecision | Promise<TurnRoutingDecision>;
+
 export interface CodexServiceProviders {
   readonly effectiveSettings?: EffectiveCodexSettingsProvider;
   readonly explicitSkillInputs?: ExplicitSkillInputProvider;
+  /** Optional per-turn settings routing for user turns (not scheduled runs). */
+  readonly turnRouting?: TurnRoutingProvider;
   /** Static deployment-environment context added to every turn. */
   readonly environmentContext?: ApplicationContext;
   readonly externalAuthTokens?: (
@@ -182,6 +206,7 @@ export class CodexService {
   readonly #remoteClientContextEnabled: () => boolean;
   readonly #effectiveSettings: EffectiveCodexSettingsProvider;
   readonly #explicitSkillInputs: ExplicitSkillInputProvider;
+  readonly #turnRouting: TurnRoutingProvider | undefined;
   readonly #environmentContext: ApplicationContext | undefined;
   readonly #externalAuthTokens: CodexServiceProviders["externalAuthTokens"];
   #pauseGate: Deferred<void> | undefined;
@@ -215,6 +240,7 @@ export class CodexService {
     this.#remoteClientContextEnabled = remoteClientContextEnabled;
     this.#effectiveSettings = providers.effectiveSettings ?? (() => ({}));
     this.#explicitSkillInputs = providers.explicitSkillInputs ?? (() => []);
+    this.#turnRouting = providers.turnRouting;
     this.#environmentContext = providers.environmentContext;
     this.#externalAuthTokens = providers.externalAuthTokens;
     rpc.onNotification((notification) => this.handleNotification(notification));
@@ -338,12 +364,17 @@ export class CodexService {
             this.#effectiveSettings(),
             this.#explicitSkillInputs(prepared),
           ]);
-          const threadId = await this.ensureThread(
-            conversationKey,
-            connector,
-            ephemeral,
-            settings.thread ?? {},
-          );
+          const newThread = ephemeral || this.#conversations.get(conversationKey) === undefined;
+          const [threadId, routing] = await Promise.all([
+            this.ensureThread(conversationKey, connector, ephemeral, settings.thread ?? {}),
+            this.routeTurn({
+              conversationKey,
+              connector,
+              text: prepared,
+              newThread,
+              attachmentCount: attachments.length,
+            }),
+          ]);
           const session = this.requireSession(threadId);
           this.#conversationSessions.set(conversationKey, session);
           session.adoptPresenter(conversationKey, connector, responder, invocation);
@@ -356,7 +387,7 @@ export class CodexService {
             conversationKey,
             connector,
             input: [...createTurnInput(prepared, connector, attachments), ...skillInputs],
-            turnSettings: settings.turn ?? {},
+            turnSettings: { ...(settings.turn ?? {}), ...routing },
             onStarted: () => {
               started = true;
             },
@@ -385,6 +416,20 @@ export class CodexService {
       });
     } finally {
       if (!dequeued) this.decrementForegroundWaiting(conversationKey);
+    }
+  }
+
+  /** Routing is advisory: a failing router never fails the turn. */
+  private async routeTurn(request: TurnRoutingRequest): Promise<TurnRoutingDecision> {
+    if (this.#turnRouting === undefined) return {};
+    try {
+      return await this.#turnRouting(request);
+    } catch (error) {
+      this.#logger.warn("Turn routing failed; using the configured settings", {
+        conversationKey: request.conversationKey,
+        error: errorMessage(error),
+      });
+      return {};
     }
   }
 

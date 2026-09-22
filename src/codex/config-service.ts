@@ -170,6 +170,19 @@ export interface EditableConfigSnapshot {
   readonly validation: ConfigValidationResult;
 }
 
+/** The model the config selects, or the catalog default when it names none. */
+export function selectedModel(
+  snapshot: Pick<EditableConfigSnapshot, "values" | "capabilities">,
+): ModelCapability | undefined {
+  const selected = snapshot.values.model;
+  const models = snapshot.capabilities.models;
+  if (selected !== null) {
+    const match = models.find((model) => model.model === selected);
+    if (match !== undefined) return match;
+  }
+  return models.find((model) => model.isDefault) ?? models[0];
+}
+
 export class ConfigValidationError extends BridgeError {
   public readonly issues: readonly ConfigValidationIssue[];
 

@@ -18,6 +18,8 @@ import { WirebotMcpServer } from "./mcp/server.js";
 import { BrowserAuth } from "./miniapp/browser-auth.js";
 import { MiniAppServer } from "./miniapp/server.js";
 import { QuickTunnel } from "./miniapp/tunnel.js";
+import { OpenRouterJevClient } from "./routing/jev.js";
+import { JevTurnRouter } from "./routing/turn-router.js";
 import { deferred } from "./shared/async.js";
 import { errorMessage } from "./shared/errors.js";
 import { atomicWriteFile, ensureDirectory, readFileIfExists } from "./shared/fs.js";
@@ -122,6 +124,7 @@ export async function runWirebot(): Promise<void> {
       chatgptAuth === undefined ? undefined : () => Promise.resolve(chatgptAuth),
     );
     let liveRuntime: CodexRuntimeService | undefined;
+    let turnRouter: JevTurnRouter | undefined;
     codex = new CodexService(
       rpc,
       conversations,
@@ -134,6 +137,7 @@ export async function runWirebot(): Promise<void> {
       {
         effectiveSettings: () => liveRuntime?.settings() ?? {},
         explicitSkillInputs: (text) => liveRuntime?.skillInputs(text) ?? [],
+        turnRouting: (request) => turnRouter?.route(request) ?? {},
         ...(config.container ? { environmentContext: createContainerEnvironmentContext() } : {}),
         ...(chatgptAuth === undefined
           ? {}
@@ -160,6 +164,22 @@ export async function runWirebot(): Promise<void> {
       logger.info("Codex is authenticated with the API key from CODEX_API_KEY");
     }
     const configService = new CodexConfigService(rpc, config.workspace);
+    if (config.jev !== undefined) {
+      turnRouter = new JevTurnRouter({
+        client: new OpenRouterJevClient(config.jev),
+        config: configService,
+        logger: logger.child({ component: "jev-router" }),
+        effort: config.jev.effort,
+        fast: config.jev.fast,
+        fastTier: config.jev.fastTier,
+      });
+      logger.info("Jev turn routing is enabled", {
+        model: config.jev.model,
+        effort: config.jev.effort,
+        fast: config.jev.fast,
+        fastTier: config.jev.fastTier,
+      });
+    }
     const runtime = new CodexRuntimeService({
       rpc,
       codex,

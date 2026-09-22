@@ -4,6 +4,15 @@ All notable changes to Wirebot are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Optional per-message reasoning-effort routing with [Jev](https://openrouter.ai/~typesafe/jev-latest),
+  TypeSafe's decision model, through OpenRouter. With `WIREBOT_JEV_API_KEY` set, each user turn
+  gets the effort level Jev picks among the ones the selected model supports (`low` for a
+  greeting, `ultra` for a large research task, and so on), falling back to the configured effort
+  on any error or timeout. `WIREBOT_JEV_FAST=auto` also lets Jev choose Codex's fast service tier
+  for quick replies on a per-turn basis.
+
 ## [0.3.3] - 2026-09-21
 
 ### Changed

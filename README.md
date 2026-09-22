@@ -146,6 +146,11 @@ and reverse-proxy that origin to the container's port 8787 (publish it in your c
 | `CODEX_API_KEY`             | unset                      | OpenAI API key for headless Codex auth   |
 | `HOST` / `PORT`             | `0.0.0.0` / `8787`         | Mini App listener (container default)    |
 | `LOG_LEVEL`                 | `info`                     | `debug`, `info`, `warn`, or `error`      |
+| `WIREBOT_JEV_API_KEY`       | unset                      | OpenRouter key; enables Jev turn routing |
+| `WIREBOT_JEV_EFFORT`        | `auto`                     | `off` keeps the configured effort        |
+| `WIREBOT_JEV_FAST`          | `off`                      | `auto` lets Jev pick the fast tier       |
+| `WIREBOT_JEV_FAST_TIER`     | `fast`                     | Service tier id used for fast replies    |
+| `WIREBOT_JEV_MODEL`         | `~typesafe/jev-latest`     | OpenRouter model id for the router       |
 
 ## Authenticate Codex
 
@@ -198,6 +203,14 @@ Set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_ALLOWED_USER_IDS` together 
 Wirebot connects through the Discord Gateway with [discord.js](https://github.com/discordjs/discord.js), so it needs no inbound webhook or public URL. Direct messages are ordinary Codex conversations. In a server, mention the bot in a text channel and Wirebot creates a dedicated public thread when Discord permissions allow it; subsequent messages in that bot-owned thread need no repeated mention. Mentions inside existing threads keep that thread as the conversation boundary. Native `/wirebot` commands, streamed progress, approval buttons, interactive Codex settings in DMs, and scheduled notifications all use the same persistent Codex tasks as the other connectors.
 
 The connector is deliberately text-only. It does not download Discord attachments, stickers, or polls, and it never uploads generated files; both inbound and outbound omissions are stated in the conversation. Model-authored mentions and link previews are suppressed on every outbound create and edit. Set `DISCORD_BOT_TOKEN` and `DISCORD_ALLOWED_USER_IDS` together to enable it, then follow [docs/discord.md](docs/discord.md) for the Developer Portal intent, invite permissions, user IDs, and first run.
+
+## Automatic reasoning effort with Jev
+
+Reasoning effort and speed are normally fixed in Codex settings for everyone who uses the bot. Wirebot can instead ask [Jev](https://openrouter.ai/~typesafe/jev-latest), TypeSafe's decision model, to pick them per message. Jev does not generate text: it answers typed questions about the message with calibrated probabilities in well under a second, so a greeting gets `low`, a typo fix `medium`, a debugging session `high`, a migration design `xhigh`, and a large research task `ultra` — whatever levels the selected Codex model reports.
+
+Set `WIREBOT_JEV_API_KEY` to an [OpenRouter](https://openrouter.ai/) API key to enable it. Before each user turn Wirebot sends the message text, whether it starts a new task, the attachment count, and the connector name to OpenRouter's Decisions endpoint, then passes the chosen effort to `turn/start`. Scheduled runs keep their own effort settings. Routing is advisory: a timeout (2.5 s), an API error, or a level the model does not support falls back to the configured effort, and the decision is logged with its probabilities at `info` level.
+
+`WIREBOT_JEV_FAST=auto` additionally lets Jev decide per turn whether a fast reply is worth it: short conversational messages and quick lookups run on the model's fast service tier (`WIREBOT_JEV_FAST_TIER`, `fast` by default, matching Codex's Fast mode), everything else on the standard tier. Fast mode consumes credits at a higher rate, so this stays off unless enabled. Message text leaves the host for this feature; do not enable it where that is not acceptable.
 
 ## Scheduled runs
 
