@@ -157,6 +157,12 @@ variables set, Wirebot runs Slack-only with the same web app. Restart Wirebot an
   `continue`) only work as `/wirebot …` in the bot DM; in a channel each thread
   is its own conversation, so run them inside the thread as a mention
   (`@Wirebot /stop`).
+- **Restart with the thread carried over**: `@Wirebot new` inside a thread (or
+  plain `new` in the bot DM) starts a fresh Codex task for that conversation.
+  Your next message there carries the thread's messages from before the
+  restart — or, in the DM, the recent messages — as plain-text context (newest
+  8,000 characters), so Codex knows the discussion without the previous task's
+  memory. `@Wirebot /new` and `/wirebot new` behave the same way.
 - **Sign-in**: if Codex is not signed in yet, `/wirebot login` in the bot DM
   returns the ChatGPT device-code link, exactly like `/login` on Telegram.
 
@@ -168,6 +174,9 @@ variables set, Wirebot runs Slack-only with the same web app. Restart Wirebot an
 - **Thread context after a restart**: the "already read this thread" memory
   is in-process, so the first mention after a Wirebot restart re-reads the
   thread history. The Codex conversation itself is persisted and continues.
+- **Pending `new` carry-over**: the "replay the conversation on the next
+  message" note set by `new` is in-process too; if Wirebot restarts in between,
+  the next message starts the fresh task without the replayed context.
 - **Attachments**: inbound files are downloaded through Slack's private file
   URLs with the bot token (never sent to third-party hosts); generated files
   are uploaded back with `files.uploadV2`. Slack voice clips are transcribed

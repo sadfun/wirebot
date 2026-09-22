@@ -157,11 +157,14 @@ export interface ChannelTraits {
   commandText(command: string): string;
   /** Whether Wirebot delivers local files as native attachments on this connector. */
   readonly supportsFileDelivery: boolean;
+  /** Whether the first message after `new` carries the conversation so far as context. */
+  readonly restartCarriesHistory: boolean;
 }
 
 const defaultTraits: ChannelTraits = {
   commandText: (command) => `/${command}`,
   supportsFileDelivery: true,
+  restartCarriesHistory: false,
 };
 
 /** Static traits per connector; Telegram matches the defaults. */
@@ -170,10 +173,12 @@ const connectorTraits: Readonly<Record<string, ChannelTraits>> = {
   slack: {
     commandText: (command) => `/wirebot ${command}`,
     supportsFileDelivery: true,
+    restartCarriesHistory: true,
   },
   discord: {
     commandText: (command) => `/wirebot ${command}`,
     supportsFileDelivery: false,
+    restartCarriesHistory: false,
   },
 };
 

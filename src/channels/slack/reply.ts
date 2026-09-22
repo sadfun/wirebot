@@ -79,6 +79,12 @@ export interface SlackMessagingApi {
     threadTs: string,
     limit: number,
   ): Promise<readonly SlackThreadMessage[]>;
+  /** The newest `limit` top-level messages posted before `latestTs`, oldest first. */
+  fetchHistory(
+    channel: string,
+    latestTs: string,
+    limit: number,
+  ): Promise<readonly SlackThreadMessage[]>;
 }
 
 export type SlackChoiceRequester = (

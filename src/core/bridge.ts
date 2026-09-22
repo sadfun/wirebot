@@ -232,7 +232,11 @@ export class CodexBridge {
         return;
       case "new":
         await this.#codex.resetConversation(message.address.key);
-        await message.responder.sendText("Started a fresh Codex task. What should we work on?");
+        await message.responder.sendText(
+          channelTraits(message.address.channel).restartCarriesHistory
+            ? "Started a fresh Codex task. Your next message will carry this conversation's earlier messages as context, without the previous task's memory. What should we work on?"
+            : "Started a fresh Codex task. What should we work on?",
+        );
         return;
       case "back": {
         const threadId = await this.#codex.activatePreviousConversationThread(

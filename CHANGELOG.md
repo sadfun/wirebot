@@ -4,6 +4,13 @@ All notable changes to Wirebot are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Slack: `@Wirebot new` inside a thread and plain `new` in the bot DM restart the conversation's
+  Codex task. The next message there carries the thread's messages from before the restart (the
+  recent messages, in a DM) as plain-text context, so the fresh task knows the discussion without
+  the previous task's memory. `/wirebot new` and `@Wirebot /new` gained the same carry-over.
+
 ## [0.3.3] - 2026-09-21
 
 ### Changed

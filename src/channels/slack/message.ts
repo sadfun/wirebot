@@ -60,6 +60,27 @@ export function routeSlackMessage(
   return { conversationSuffix: threadRoot, replyThreadTs: threadRoot };
 }
 
+/** Words that act as commands without a leading slash, in mentions and DMs alike. */
+const bareCommandWords: ReadonlySet<string> = new Set(["new"]);
+
+/**
+ * Parse a command out of mention-stripped Slack text: `/name args` (Slack
+ * only swallows a leading slash in the composer, so mentions carry it through)
+ * or a bare command word such as `new`. Provider-owned parsing — the bridge
+ * trusts `InboundMessage.command`.
+ */
+export function parseSlackCommand(
+  text: string,
+): Readonly<{ name: string; args: string }> | undefined {
+  const trimmed = text.trim();
+  const match = /^\/([a-z][a-z0-9_]*)(?:@[a-z0-9_]+)?(?:[ \t]+([^\r\n]*))?$/i.exec(trimmed);
+  const name = match?.[1];
+  if (name !== undefined) return { name: name.toLowerCase(), args: match?.[2]?.trimStart() ?? "" };
+  const bare = /^([a-z]+)[.!]?$/i.exec(trimmed)?.[1]?.toLowerCase();
+  if (bare !== undefined && bareCommandWords.has(bare)) return { name: bare, args: "" };
+  return undefined;
+}
+
 export interface NormalizedSlackMessage {
   readonly text: string;
   readonly files: readonly SlackFile[];
@@ -89,18 +110,21 @@ export interface SlackThreadMessage {
 
 /**
  * Render the earlier messages of a thread as context for Codex, oldest first.
- * The triggering message itself is excluded; when the thread exceeds the
- * character budget the oldest messages are dropped.
+ * The triggering message itself is excluded, as is everything from `beforeTs`
+ * on when given; when the thread exceeds the character budget the oldest
+ * messages are dropped.
  */
 export function formatThreadContext(
   messages: readonly SlackThreadMessage[],
   triggerTs: string,
   nameOf: (message: SlackThreadMessage) => string,
   characterBudget = 8_000,
+  beforeTs?: string,
 ): string | undefined {
   const lines: string[] = [];
   for (const message of messages) {
     if (message.ts === triggerTs) continue;
+    if (beforeTs !== undefined && Number(message.ts) >= Number(beforeTs)) continue;
     const text = mrkdwnToPlainText(message.text ?? "").trim();
     const attachments = (message.files ?? [])
       .map((file) => `[attached: ${file.name ?? file.title ?? "file"}]`)
