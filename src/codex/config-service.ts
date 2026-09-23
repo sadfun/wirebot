@@ -37,7 +37,6 @@ const sandboxModeSchema = z.enum(["read-only", "workspace-write", "danger-full-a
 const webSearchSchema = z.enum(["disabled", "cached", "indexed", "live"]);
 const reasoningSummarySchema = z.enum(["auto", "concise", "detailed", "none"]);
 const verbositySchema = z.enum(["low", "medium", "high"]);
-const personalitySchema = z.enum(["none", "friendly", "pragmatic"]);
 const windowsSandboxSchema = z.enum(["unelevated", "elevated"]);
 
 const nullableIdentifierSchema = z
@@ -90,7 +89,6 @@ const editableCodexConfigSchema = z.strictObject({
   model_reasoning_summary: reasoningSummarySchema.nullable(),
   model_verbosity: verbositySchema.nullable(),
   service_tier: nullableIdentifierSchema,
-  personality: personalitySchema.nullable(),
   windows_sandbox: windowsSandboxSchema.nullable(),
   shell_environment_include_only: environmentPatternsSchema,
   features: featureValuesSchema,
@@ -209,7 +207,6 @@ const scalarConfigPaths = Object.freeze([
   ["model_reasoning_summary", "model_reasoning_summary"],
   ["model_verbosity", "model_verbosity"],
   ["service_tier", "service_tier"],
-  ["personality", "personality"],
   ["windows_sandbox", "windows.sandbox"],
   ["shell_environment_include_only", "shell_environment_policy.include_only"],
 ] as const satisfies readonly (readonly [

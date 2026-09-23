@@ -133,12 +133,6 @@ const verbosityOptions: readonly UiOption<NonNullable<EditableCodexConfig["model
   { value: "high", label: "High" },
 ];
 
-const personalityOptions: readonly UiOption<NonNullable<EditableCodexConfig["personality"]>>[] = [
-  { value: "none", label: "None" },
-  { value: "friendly", label: "Friendly" },
-  { value: "pragmatic", label: "Pragmatic" },
-];
-
 const windowsSandboxOptions: readonly UiOption<
   NonNullable<EditableCodexConfig["windows_sandbox"]>
 >[] = [
@@ -895,17 +889,6 @@ function ModelFields({
         />
       )}
       <Rule />
-      <SelectField
-        id="config-personality"
-        label="Personality"
-        hint="The conversational style Codex should use."
-        value={draft.personality}
-        fallback="pragmatic"
-        issue={primaryIssue(issues, "personality")}
-        changed={"personality" in changes}
-        options={personalityOptions}
-        onChange={(value) => form.updateDraft({ personality: value })}
-      />
       <SelectField
         id="config-model_reasoning_summary"
         label="Reasoning summary"

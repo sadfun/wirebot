@@ -27,7 +27,6 @@ export const snapshot: EditableConfigSnapshot = {
     model_reasoning_summary: null,
     model_verbosity: null,
     service_tier: null,
-    personality: null,
     windows_sandbox: null,
     shell_environment_include_only: null,
     features: {},
