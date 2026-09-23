@@ -4,12 +4,21 @@ All notable changes to Wirebot are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-23
+
 ### Added
 
 - Slack: `@Wirebot new` inside a thread and plain `new` in the bot DM restart the conversation's
   Codex task. The next message there carries the thread's messages from before the restart (the
   recent messages, in a DM) as plain-text context, so the fresh task knows the discussion without
   the previous task's memory. `/wirebot new` and `@Wirebot /new` gained the same carry-over.
+
+### Changed
+
+- Updated the bundled Codex CLI from 0.155.1 to 0.156.1 and regenerated the app-server
+  protocol bindings. Codex retired the Friendly and Pragmatic personality choices, so the
+  Model settings page no longer offers a style selector that Codex ignores. Existing Codex
+  configuration files are left intact.
 
 ## [0.3.3] - 2026-09-21
 

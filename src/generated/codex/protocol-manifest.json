@@ -1,5 +1,5 @@
 {
-  "codexVersion": "0.155.1",
+  "codexVersion": "0.156.1",
   "methods": {
     "clientRequests": [
       "account/login/cancel",
@@ -91,7 +91,6 @@
       "thread/read",
       "thread/resume",
       "thread/revert",
-      "thread/rollback",
       "thread/section/move",
       "thread/shellCommand",
       "thread/start",

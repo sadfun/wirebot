@@ -1,4 +1,3 @@
-import type { Personality } from "../generated/codex/Personality.js";
 import type { ServerNotification } from "../generated/codex/ServerNotification.js";
 import type { Config } from "../generated/codex/v2/Config.js";
 import type { ConfigBatchWriteParams } from "../generated/codex/v2/ConfigBatchWriteParams.js";
@@ -527,7 +526,6 @@ function bankedReset(credit: RateLimitResetCredit): CodexBankedReset {
 }
 
 function settingsFromConfig(config: Config): EffectiveCodexSettings {
-  const personality = isPersonality(config.personality) ? config.personality : null;
   return {
     thread: {
       model: config.model,
@@ -538,7 +536,6 @@ function settingsFromConfig(config: Config): EffectiveCodexSettings {
       sandbox: config.sandbox_mode,
       baseInstructions: config.instructions,
       developerInstructions: config.developer_instructions,
-      personality,
     },
     turn: {
       model: config.model,
@@ -547,13 +544,8 @@ function settingsFromConfig(config: Config): EffectiveCodexSettings {
       approvalsReviewer: config.approvals_reviewer,
       effort: config.model_reasoning_effort,
       summary: config.model_reasoning_summary,
-      personality,
     },
   };
-}
-
-function isPersonality(value: unknown): value is Personality {
-  return value === "none" || value === "friendly" || value === "pragmatic";
 }
 
 function escapeRegExp(value: string): string {

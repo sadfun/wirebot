@@ -123,7 +123,6 @@ type CodexThreadSettings = Readonly<
     | "sandbox"
     | "baseInstructions"
     | "developerInstructions"
-    | "personality"
   >
 >;
 
@@ -137,7 +136,6 @@ type CodexTurnSettings = Readonly<
     | "serviceTier"
     | "effort"
     | "summary"
-    | "personality"
   >
 >;
 
