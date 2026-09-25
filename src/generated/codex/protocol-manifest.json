@@ -1,7 +1,10 @@
 {
-  "codexVersion": "0.156.1",
+  "codexVersion": "0.157.0",
   "methods": {
     "clientRequests": [
+      "account/gatewayOAuth/cancel",
+      "account/gatewayOAuth/login",
+      "account/gatewayOAuth/read",
       "account/login/cancel",
       "account/login/start",
       "account/logout",
@@ -123,6 +126,7 @@
       "mcpServer/elicitation/request"
     ],
     "serverNotifications": [
+      "account/gatewayOAuth/changed",
       "account/login/completed",
       "account/rateLimits/updated",
       "account/updated",
