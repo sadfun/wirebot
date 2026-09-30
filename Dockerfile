@@ -18,15 +18,15 @@ COPY src ./src
 RUN bun run build
 RUN bun build --compile --minify --bytecode --sourcemap \
       --define WIREBOT_COMPILED=true \
-      --target="bun-linux-$([ "$TARGETARCH" = "arm64" ] && echo arm64 || echo x64)" \
+      --target="bun-linux-$([ "$TARGETARCH" = "arm64" ] && echo arm64 || echo x64-baseline)" \
       src/cli/main.ts --outfile dist/wirebot
 RUN bun scripts/bake-toolchains.ts /toolchains "$([ "$TARGETARCH" = "arm64" ] && echo arm64 || echo x64)"
 
-# Runtime stage: an Ubuntu machine for the agent. Wirebot and its pinned
+# Runtime stage: a Debian machine for the agent. Wirebot and its pinned
 # toolchains live in the image under /opt/wirebot; everything the user should
 # keep across image updates lives in the /data volume, with /usr/local and
 # /home/linuxbrew symlinked into it.
-FROM ubuntu:24.04
+FROM debian:13-slim
 ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -38,10 +38,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       jq ripgrep sqlite3 rsync \
       dnsutils iputils-ping netcat-openbsd \
       python3 python3-pip python3-venv pipx \
+      chromium chromium-sandbox xvfb fonts-liberation \
       build-essential pkg-config \
       ffmpeg imagemagick \
     && rm -rf /var/lib/apt/lists/* \
     && locale-gen en_US.UTF-8
+
+# Patchright keeps the Playwright API while removing common automation leaks.
+# Its agent CLI drives Debian's security-updated Chromium on both architectures.
+RUN python3 -m venv /opt/wirebot/browser-venv \
+    && /opt/wirebot/browser-venv/bin/pip install --no-cache-dir --disable-pip-version-check \
+      "patchright==1.62.1"
 
 # Pinned quick-tunnel and voice-transcription binaries, verified against
 # GitHub's published SHA-256 digests (update versions and checksums together).
@@ -72,7 +79,7 @@ RUN set -eu; \
 
 # The agent user owns /data and has passwordless sudo; the Wirebot install
 # under /opt/wirebot stays root-owned so the agent cannot corrupt it.
-RUN userdel -r ubuntu \
+RUN if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi \
     && useradd --uid 1000 --no-create-home --home-dir /data/home --shell /bin/bash wirebot \
     && echo "wirebot ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/wirebot \
     && chmod 0440 /etc/sudoers.d/wirebot
@@ -90,14 +97,21 @@ COPY --from=build /toolchains /opt/wirebot/toolchains
 COPY capabilities/skills /etc/codex/skills
 COPY docker/entrypoint.sh /opt/wirebot/bin/entrypoint.sh
 RUN chmod 0755 /opt/wirebot/bin/wirebot /opt/wirebot/bin/entrypoint.sh \
+      /etc/codex/skills/chromium-browser/scripts/playwright-cli \
+    && ln -s /etc/codex/skills/chromium-browser/scripts/playwright-cli \
+      /opt/wirebot/bin/playwright-cli \
+    && ln -s /etc/codex/skills/chromium-browser/scripts/playwright-cli \
+      /usr/bin/playwright-cli \
     # The bake runs as root; the agent user only needs to read and execute.
-    && chmod -R a+rX /opt/wirebot/toolchains /opt/wirebot/miniapp /opt/wirebot/seed
+    && chmod -R a+rX /opt/wirebot/browser-venv /opt/wirebot/toolchains \
+      /opt/wirebot/miniapp /opt/wirebot/seed
 
 ENV WIREBOT_CONTAINER=1 \
     WIREBOT_DATA_DIR=/data \
     CODEX_WORKSPACE=/data/workspace \
     WIREBOT_TOOLCHAINS_DIR=/opt/wirebot/toolchains \
     WIREBOT_ASSETS_DIR=/opt/wirebot/miniapp \
+    WIREBOT_BROWSER_PYTHON=/opt/wirebot/browser-venv/bin/python \
     HOME=/data/home \
     HOST=0.0.0.0 \
     CODEX_CHECK_UPDATES=false \
