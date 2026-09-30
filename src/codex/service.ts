@@ -50,6 +50,7 @@ import {
 } from "./thread-session.js";
 
 export interface CodexInvocationContext {
+  readonly externalMessage?: true;
   readonly reactToMessage?: (reaction: string) => Promise<void>;
   readonly owner?: ProviderReference;
   readonly deliveryTarget?: ProviderReference;
@@ -295,6 +296,7 @@ export class CodexService {
     attachments: readonly InboundAttachment[] = [],
     invocation: CodexInvocationContext = {},
     syntheticText = false,
+    target?: { readonly threadId: string; readonly authorize: () => Promise<void> },
   ): Promise<void> {
     const stream = responder.createStream();
     const voiceAttachments = attachments.filter((attachment) => attachment.kind === "voice");
@@ -323,6 +325,7 @@ export class CodexService {
         await this.enterJob();
         let started = false;
         try {
+          await target?.authorize();
           if (!shouldTranscribe) {
             if (startsQueued) {
               stream.setProgress({ summary: "Thinking…", actions: [], plan: [] });
@@ -336,12 +339,20 @@ export class CodexService {
             this.#effectiveSettings(),
             this.#explicitSkillInputs(prepared),
           ]);
-          const threadId = await this.ensureThread(
-            conversationKey,
-            connector,
-            ephemeral,
-            settings.thread ?? {},
-          );
+          const threadId =
+            target === undefined
+              ? await this.ensureThread(
+                  conversationKey,
+                  connector,
+                  ephemeral,
+                  settings.thread ?? {},
+                )
+              : await this.resumeThreadStrict(
+                  target.threadId,
+                  settings.thread ?? {},
+                  conversationKey,
+                  connector,
+                );
           const session = this.requireSession(threadId);
           this.#conversationSessions.set(conversationKey, session);
           session.adoptPresenter(conversationKey, connector, responder, invocation);
