@@ -4,6 +4,15 @@ All notable changes to Wirebot are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-09-30
+
+### Changed
+
+- Updated the bundled Codex CLI from 0.159.0 to 0.159.2 and verified unchanged
+  app-server protocol bindings. The updated model catalog includes GPT-6.1 Sol as
+  the upstream default; explicitly configured models remain selected. This also
+  includes Codex's fix for flashing background process windows on Windows.
+
 ## [0.3.6] - 2026-09-29
 
 ### Changed
