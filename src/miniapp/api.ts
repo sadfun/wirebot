@@ -85,7 +85,7 @@ export async function requestSnapshot(
   body?: Readonly<{
     expectedVersion: string | null;
     values: Partial<EditableCodexConfig>;
-    wirebot?: WirebotSettings;
+    wirebot?: Partial<WirebotSettings>;
   }>,
 ): Promise<LoadedSnapshot> {
   const value = await requestJson("/api/config", {

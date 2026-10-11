@@ -7,6 +7,7 @@ import {
   type ProviderReference,
 } from "../core/channel.js";
 import type { ConversationStore } from "../core/conversation-store.js";
+import type { ReasoningEffort } from "../generated/codex/ReasoningEffort.js";
 import type { RequestId } from "../generated/codex/RequestId.js";
 import type { ServerNotification } from "../generated/codex/ServerNotification.js";
 import type { ServerRequest } from "../generated/codex/ServerRequest.js";
@@ -32,10 +33,11 @@ import type { ToolRequestUserInputResponse } from "../generated/codex/v2/ToolReq
 import type { TurnStartParams } from "../generated/codex/v2/TurnStartParams.js";
 import type { TurnStartResponse } from "../generated/codex/v2/TurnStartResponse.js";
 import type { UserInput } from "../generated/codex/v2/UserInput.js";
-import { type Deferred, deferred, KeyedSerialQueue } from "../shared/async.js";
+import { type Deferred, deferred, KeyedSerialQueue, withAbort } from "../shared/async.js";
 import { BridgeError, errorMessage } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
 import type { VoiceTranscriber } from "../transcription/service.js";
+import type { AutoRoutingRequest, AutoTurnSettings } from "./auto-mode.js";
 import {
   type ApplicationContext,
   type CodexAppServer,
@@ -134,6 +136,7 @@ type CodexTurnSettings = Readonly<
     | "sandboxPolicy"
     | "model"
     | "serviceTier"
+    | "serviceTierForTurn"
     | "effort"
     | "summary"
   >
@@ -153,6 +156,8 @@ type ExplicitSkillInputProvider = (
 ) => readonly ExplicitSkillInput[] | Promise<readonly ExplicitSkillInput[]>;
 
 export interface CodexServiceProviders {
+  readonly autoRouting?: (request: AutoRoutingRequest) => Promise<AutoTurnSettings>;
+  readonly defaultReasoningEffort?: (model: string | null) => Promise<ReasoningEffort | undefined>;
   readonly effectiveSettings?: EffectiveCodexSettingsProvider;
   readonly explicitSkillInputs?: ExplicitSkillInputProvider;
   /** Static deployment-environment context added to every turn. */
@@ -166,7 +171,9 @@ export class CodexService {
   static readonly #backgroundQuietPeriodMs = 30_000;
   readonly #queue = new KeyedSerialQueue();
   readonly #sessions = new Map<string, ThreadSession>();
+  readonly #threadModels = new Map<string, string>();
   readonly #conversationSessions = new Map<string, ThreadSession>();
+  readonly #routingControllers = new Map<string, AbortController>();
   readonly #dynamicTools = new Map<string, CodexDynamicTool>();
   readonly #foregroundWaiting = new Map<string, number>();
   readonly #lastForegroundAt = new Map<string, number>();
@@ -179,6 +186,8 @@ export class CodexService {
   readonly #voiceTranscriber: VoiceTranscriber | undefined;
   readonly #remoteClientContextEnabled: () => boolean;
   readonly #effectiveSettings: EffectiveCodexSettingsProvider;
+  readonly #autoRouting: CodexServiceProviders["autoRouting"];
+  readonly #defaultReasoningEffort: CodexServiceProviders["defaultReasoningEffort"];
   readonly #explicitSkillInputs: ExplicitSkillInputProvider;
   readonly #environmentContext: ApplicationContext | undefined;
   readonly #externalAuthTokens: CodexServiceProviders["externalAuthTokens"];
@@ -212,6 +221,8 @@ export class CodexService {
     this.#voiceTranscriber = voiceTranscriber;
     this.#remoteClientContextEnabled = remoteClientContextEnabled;
     this.#effectiveSettings = providers.effectiveSettings ?? (() => ({}));
+    this.#autoRouting = providers.autoRouting;
+    this.#defaultReasoningEffort = providers.defaultReasoningEffort;
     this.#explicitSkillInputs = providers.explicitSkillInputs ?? (() => []);
     this.#environmentContext = providers.environmentContext;
     this.#externalAuthTokens = providers.externalAuthTokens;
@@ -295,6 +306,7 @@ export class CodexService {
     attachments: readonly InboundAttachment[] = [],
     invocation: CodexInvocationContext = {},
     syntheticText = false,
+    requestText?: string,
   ): Promise<void> {
     const stream = responder.createStream();
     const voiceAttachments = attachments.filter((attachment) => attachment.kind === "voice");
@@ -303,15 +315,18 @@ export class CodexService {
     let dequeued = false;
     try {
       const startsQueued = this.#queue.isBusy(conversationKey);
-      let preparedText: Promise<string> | undefined;
+      let preparedText: Promise<{ text: string; requestText: string | undefined }> | undefined;
       if (shouldTranscribe) {
         await stream.start({ summary: "Transcribing…", actions: [], plan: [] });
-        preparedText = this.transcribeVoiceMessages(text, syntheticText, voiceAttachments).then(
-          (prepared) => {
-            stream.setProgress({ summary: "Thinking…", actions: [], plan: [] });
-            return prepared;
-          },
-        );
+        preparedText = this.transcribeVoiceMessages(
+          text,
+          syntheticText,
+          voiceAttachments,
+          requestText,
+        ).then((prepared) => {
+          stream.setProgress({ summary: "Thinking…", actions: [], plan: [] });
+          return prepared;
+        });
         void preparedText.catch(() => undefined);
       } else if (startsQueued) {
         await stream.start({ summary: "Queued behind earlier work…", actions: [], plan: [] });
@@ -330,11 +345,11 @@ export class CodexService {
               await stream.start();
             }
           }
-          const prepared = preparedText === undefined ? text : await preparedText;
+          const prepared = preparedText === undefined ? { text, requestText } : await preparedText;
           this.#logger.debug("Preparing Codex turn", { conversationKey, connector });
           const [settings, skillInputs] = await Promise.all([
             this.#effectiveSettings(),
-            this.#explicitSkillInputs(prepared),
+            this.#explicitSkillInputs(prepared.requestText ?? prepared.text),
           ]);
           const threadId = await this.ensureThread(
             conversationKey,
@@ -345,6 +360,42 @@ export class CodexService {
           const session = this.requireSession(threadId);
           this.#conversationSessions.set(conversationKey, session);
           session.adoptPresenter(conversationKey, connector, responder, invocation);
+          const routing = new AbortController();
+          this.#routingControllers.set(conversationKey, routing);
+          let autoSettings: AutoTurnSettings | undefined;
+          const model =
+            settings.turn?.model ??
+            this.#threadModels.get(threadId) ??
+            settings.thread?.model ??
+            null;
+          try {
+            autoSettings = await this.#autoRouting?.({
+              conversationKey,
+              threadId,
+              text: prepared.text,
+              ...(prepared.requestText === undefined ? {} : { requestText: prepared.requestText }),
+              model,
+              hasAttachments: attachments.length > 0,
+              signal: routing.signal,
+            });
+            if (
+              autoSettings?.effort == null &&
+              settings.turn?.effort == null &&
+              this.#defaultReasoningEffort !== undefined
+            ) {
+              const resolveDefault = this.#defaultReasoningEffort;
+              const effort = await withAbort(() => resolveDefault(model), routing.signal);
+              if (effort !== undefined) autoSettings = { ...autoSettings, effort };
+            }
+          } catch (error) {
+            if (!routing.signal.aborted) throw error;
+          } finally {
+            this.#routingControllers.delete(conversationKey);
+          }
+          if (routing.signal.aborted) {
+            await stream.complete("Stopped.");
+            return;
+          }
           this.#logger.debug("Starting Codex turn", { conversationKey, threadId });
           const finalized = await this.startTurn(session, {
             origin: "user",
@@ -353,8 +404,8 @@ export class CodexService {
             invocation,
             conversationKey,
             connector,
-            input: [...createTurnInput(prepared, connector, attachments), ...skillInputs],
-            turnSettings: settings.turn ?? {},
+            input: [...createTurnInput(prepared.text, connector, attachments), ...skillInputs],
+            turnSettings: { ...settings.turn, ...autoSettings },
             onStarted: () => {
               started = true;
             },
@@ -468,6 +519,16 @@ export class CodexService {
     session: ThreadSession,
     request: StartTurnRequest,
   ): Promise<FinalizedTurn> {
+    const model = request.turnSettings.model ?? this.#threadModels.get(session.threadId) ?? null;
+    // Codex turn/start effort:null means "keep the previous effort". Restore the
+    // model default explicitly so manual turns and heartbeats cannot inherit Auto.
+    const effort =
+      request.turnSettings.effort ??
+      (request.origin === "scheduled" ? await this.#defaultReasoningEffort?.(model) : undefined);
+    const turnSettings = {
+      ...request.turnSettings,
+      ...(effort === undefined ? {} : { effort }),
+    };
     const additionalContext = this.additionalContext(request.connector, request.invocation);
     const pending = session.expectTurn(request);
     let response: TurnStartResponse;
@@ -475,7 +536,7 @@ export class CodexService {
       response = await this.#rpc.request<TurnStartResponse>({
         method: "turn/start",
         params: {
-          ...request.turnSettings,
+          ...turnSettings,
           threadId: session.threadId,
           clientUserMessageId: crypto.randomUUID(),
           input: [...request.input],
@@ -483,6 +544,7 @@ export class CodexService {
           ...(request.outputSchema === undefined ? {} : { outputSchema: request.outputSchema }),
         },
       });
+      if (model !== null) this.#threadModels.set(session.threadId, model);
     } catch (error) {
       const view = pending.cancel();
       if (view === undefined) throw error;
@@ -523,9 +585,10 @@ export class CodexService {
     text: string,
     syntheticText: boolean,
     attachments: readonly InboundAttachment[],
-  ): Promise<string> {
+    requestText?: string,
+  ): Promise<{ text: string; requestText: string | undefined }> {
     const transcriber = this.#voiceTranscriber;
-    if (transcriber === undefined) return text;
+    if (transcriber === undefined) return { text, requestText };
     let transcripts: readonly string[];
     try {
       transcripts = await Promise.all(
@@ -540,7 +603,13 @@ export class CodexService {
       });
       const notice =
         "Note: voice transcription is unavailable, so the voice message is forwarded untranscribed as an audio file.";
-      return [text.trim(), notice].filter((part) => part.length > 0).join("\n\n");
+      return {
+        text: [text.trim(), notice].filter((part) => part.length > 0).join("\n\n"),
+        requestText:
+          requestText === undefined
+            ? undefined
+            : [requestText.trim(), notice].filter((part) => part.length > 0).join("\n\n"),
+      };
     }
     const base = syntheticText ? "" : text.trim();
     const blocks = transcripts.map((transcript, index) => {
@@ -550,7 +619,15 @@ export class CodexService {
           : `Voice message transcript ${index + 1}:`;
       return `${heading}\n${transcript}`;
     });
-    return [base, ...blocks].filter((part) => part.length > 0).join("\n\n");
+    return {
+      text: [base, ...blocks].filter((part) => part.length > 0).join("\n\n"),
+      requestText:
+        requestText === undefined
+          ? undefined
+          : [syntheticText ? "" : requestText.trim(), ...blocks]
+              .filter((part) => part.length > 0)
+              .join("\n\n"),
+    };
   }
 
   public async resetConversation(conversationKey: string): Promise<void> {
@@ -668,13 +745,15 @@ export class CodexService {
   }
 
   public async interrupt(conversationKey: string): Promise<boolean> {
+    const routing = this.#routingControllers.get(conversationKey);
+    routing?.abort();
     const sessions = new Set<ThreadSession>();
     const bound = this.#conversationSessions.get(conversationKey);
     if (bound !== undefined) sessions.add(bound);
     const storedThread = this.#conversations.get(conversationKey);
     const stored = storedThread === undefined ? undefined : this.#sessions.get(storedThread);
     if (stored !== undefined) sessions.add(stored);
-    let interrupted = false;
+    let interrupted = routing !== undefined;
     for (const session of sessions) {
       interrupted = (await session.interruptRunning()) || interrupted;
     }
@@ -777,10 +856,12 @@ export class CodexService {
         ephemeral,
         serviceName: "wirebot",
         threadSource,
+        historyMode: "legacy",
         dynamicTools: [...this.#dynamicTools.values()].map((tool) => tool.spec),
       },
     });
     this.openSession(started.thread.id, conversationKey, connector);
+    if (started.model !== undefined) this.#threadModels.set(started.thread.id, started.model);
     return started.thread.id;
   }
 
@@ -796,6 +877,7 @@ export class CodexService {
       params: { ...settings, threadId, cwd: this.#workspace },
     });
     this.openSession(resumed.thread.id, conversationKey, connector);
+    if (resumed.model !== undefined) this.#threadModels.set(resumed.thread.id, resumed.model);
     return resumed.thread.id;
   }
 
@@ -855,12 +937,20 @@ export class CodexService {
   private handleTransportExit(error: BridgeError): void {
     const sessions = [...this.#sessions.values()];
     this.#sessions.clear();
+    this.#threadModels.clear();
     this.#conversationSessions.clear();
     for (const session of sessions) session.fail(error);
   }
 
   private handleNotification(notification: ServerNotification): void {
     switch (notification.method) {
+      case "thread/settings/updated":
+        if (this.#sessions.has(notification.params.threadId))
+          this.#threadModels.set(
+            notification.params.threadId,
+            notification.params.threadSettings.model,
+          );
+        return;
       case "account/login/completed":
         this.handleLoginCompleted(notification.params);
         return;

@@ -38,6 +38,25 @@ export async function withTimeout<T>(
   }
 }
 
+/** Cancel the wait without abandoning rejection handling for the underlying work. */
+export function withAbort<T>(start: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    start().then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
 export class KeyedSerialQueue {
   readonly #tails = new Map<string, Promise<void>>();
 

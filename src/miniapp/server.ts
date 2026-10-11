@@ -18,7 +18,7 @@ import { CodexRpcError } from "../codex/rpc.js";
 import type { CodexRuntimeService } from "../codex/runtime-service.js";
 import type { CodexService } from "../codex/service.js";
 import { SkillBrowserError } from "../codex/skill-browser.js";
-import type { WirebotSettingsStore } from "../core/settings-store.js";
+import { settingsPatchSchema, type WirebotSettingsStore } from "../core/settings-store.js";
 import type { GetAccountResponse } from "../generated/codex/v2/GetAccountResponse.js";
 import { BridgeError, errorMessage } from "../shared/errors.js";
 import type { Logger } from "../shared/logger.js";
@@ -54,11 +54,7 @@ function staticAssetFor(pathname: string): StaticAsset | undefined {
 const settingsUpdateSchema = z.strictObject({
   expectedVersion: z.string().nullable(),
   values: z.record(z.string(), z.unknown()),
-  wirebot: z
-    .strictObject({
-      remoteClientContext: z.boolean(),
-    })
-    .optional(),
+  wirebot: settingsPatchSchema.optional(),
 });
 
 const applyBankedResetSchema = z.strictObject({

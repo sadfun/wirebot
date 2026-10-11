@@ -190,6 +190,7 @@ export class CodexBridge {
         message.attachments,
         {},
         message.syntheticText === true,
+        message.requestText,
       );
       return;
     }
@@ -215,6 +216,7 @@ export class CodexBridge {
         ...(additionalContext === undefined ? {} : { additionalContext }),
       },
       message.syntheticText === true,
+      message.requestText,
     );
   }
 
@@ -233,7 +235,7 @@ export class CodexBridge {
       case "new":
         await this.#codex.resetConversation(message.address.key);
         await message.responder.sendText(
-          channelTraits(message.address.channel).restartCarriesHistory
+          channelTraits(message.address.channel).restartCarriesHistory && !message.address.isPrivate
             ? "Started a fresh Codex task. Your next message will carry this conversation's earlier messages as context, without the previous task's memory. What should we work on?"
             : "Started a fresh Codex task. What should we work on?",
         );

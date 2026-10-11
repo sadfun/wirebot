@@ -8,6 +8,7 @@ import type {
   ProgressPlanStep,
   ProgressSnapshot,
 } from "../core/channel.js";
+import type { MessagePhase } from "../generated/codex/MessagePhase.js";
 import type { RequestId } from "../generated/codex/RequestId.js";
 import type { ServerNotification } from "../generated/codex/ServerNotification.js";
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem.js";
@@ -68,7 +69,7 @@ interface PendingTurnStart {
 interface TurnView extends TurnPresentation {
   readonly turnId: string;
   readonly terminal: Deferred<FinalizedTurn>;
-  readonly phases: Map<string, "commentary" | "final_answer" | null>;
+  readonly phases: Map<string, MessagePhase | null>;
   readonly actions: Map<string, readonly ProgressAction[]>;
   readonly reasoning: Map<string, string[]>;
   readonly generatedPaths: string[];

@@ -123,6 +123,8 @@ export interface InboundMessage {
   readonly replyTo?: ProviderReference;
   readonly sender: SenderIdentity;
   readonly text: string;
+  /** Current request without a connector's historical context prefix. */
+  readonly requestText?: string;
   /**
    * True when `text` is channel-synthesized filler describing attached media
    * (for example a voice-message placeholder), not words the user wrote.

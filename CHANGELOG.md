@@ -4,6 +4,49 @@ All notable changes to Wirebot are documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-11
+
+### Added
+
+- Default-on Auto effort & speed: reassess every message against the full active
+  conversation using a subscription-backed GPT-6.1 Sol / Low / Fast classifier.
+  Research and debugging use Ultra at Standard speed; ordinary tasks use High or
+  Extra high, simple questions Low or Medium. Explicit speed requests use the fastest
+  tier available to the selected model and account. Local routing handles classifier
+  failures. Web and in-chat settings can switch back to manual mode.
+
+### Changed
+
+- Slack `/wirebot config` always opens the native settings buttons, including Auto
+  effort & speed, even when the browser app is available. `/wirebot web` remains
+  the browser entry point. In-chat Codex saves now refresh the loaded runtime settings.
+- Updated the bundled Codex CLI from 0.159.0 to 0.162.1 and regenerated the app-server
+  protocol bindings, including support for the new partial-answer message phase.
+- Model and speed pickers use the current Codex catalog, including GPT-6.1 Sol and
+  Ultrafast where available to the account. The web speed selector now shows Standard
+  correctly when no tier is configured. In-chat settings show speed names and reset
+  unsupported speed and reasoning choices when switching models, matching the web app.
+- Slack mentions refresh the complete thread context, including intervening human
+  discussion. DMs no longer replay messages from before the latest `new` reset.
+- New Codex threads explicitly retain legacy rollout history while the bundled CLI's
+  paginated history endpoints are unimplemented.
+
+### Fixed
+
+- Auto routing cancellation covers history and classifier startup, including late
+  responses; streamed classifier answers are retained when completion omits items.
+- Auto speed stays local to the turn. Manual and scheduled turns restore default
+  effort, and continued model-specific threads use their actual model capabilities.
+- Slack preserves message order during history retrieval; local fallback uses only
+  the latest request and recognizes negated speed requests and Russian questions.
+- Toggling Auto preserves conflict detection for an unsaved web settings draft.
+- Delayed Auto toggle responses preserve newly saved settings. Slack follow-ups
+  retain queued acknowledgements, attachment captions cannot bypass their queue,
+  and historical skill mentions no longer activate skills on later requests.
+- Current voice transcripts remain separate from Slack history for routing and
+  skill selection. Ineligible classifiers skip history loading, and metadata lookup
+  failures no longer block otherwise runnable turns.
+
 ## [0.3.6] - 2026-09-29
 
 ### Changed

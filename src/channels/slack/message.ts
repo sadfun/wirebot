@@ -123,7 +123,7 @@ export function formatThreadContext(
 ): string | undefined {
   const lines: string[] = [];
   for (const message of messages) {
-    if (message.ts === triggerTs) continue;
+    if (Number(message.ts) >= Number(triggerTs)) continue;
     if (beforeTs !== undefined && Number(message.ts) >= Number(beforeTs)) continue;
     const text = mrkdwnToPlainText(message.text ?? "").trim();
     const attachments = (message.files ?? [])

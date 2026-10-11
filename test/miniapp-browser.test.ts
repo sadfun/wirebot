@@ -22,6 +22,21 @@ async function signIn() {
 }
 
 describe("Browser HTTP app", () => {
+  test("Auto mode saves immediately without overwriting remote-session settings", async () => {
+    app = await startTestApp();
+    const { cookie } = await signIn();
+    const headers = { ...browserHeaders, Cookie: cookie.split(";")[0] as string };
+    for (const wirebot of [{ remoteClientContext: false }, { autoMode: false }]) {
+      const response = await request("/api/config", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ expectedVersion: "test-version", values: {}, wirebot }),
+      });
+      expect(response.status).toBe(200);
+    }
+    const saved = await (await request("/api/config", { headers })).json();
+    expect(saved.wirebot).toEqual({ remoteClientContext: false, autoMode: false });
+  });
   test("serves browser deep links and legacy miniapp URLs without Telegram configured", async () => {
     app = await startTestApp();
     for (const path of [

@@ -178,8 +178,10 @@ async function validateExperimentalProtocol(
     throw new Error("Codex no longer exposes turn/start.additionalContext");
   }
   const threadStart = await readFile(join(bindingsDirectory, "v2", "ThreadStartParams.ts"), "utf8");
-  if (!threadStart.includes("dynamicTools")) {
-    throw new Error("Codex no longer exposes thread/start.dynamicTools");
+  for (const field of ["dynamicTools", "environments", "selectedCapabilityRoots", "historyMode"]) {
+    if (!threadStart.includes(field)) {
+      throw new Error(`Codex no longer exposes thread/start.${field}`);
+    }
   }
 }
 

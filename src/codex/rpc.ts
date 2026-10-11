@@ -50,6 +50,11 @@ interface ThreadStartWithDynamicTools {
   readonly method: "thread/start";
   readonly params: ThreadStartParams & {
     readonly dynamicTools: readonly DynamicToolSpec[];
+    /** An empty selection isolates internal classification threads from host capabilities. */
+    readonly environments?: readonly [];
+    readonly selectedCapabilityRoots?: readonly [];
+    /** Keep rollout hydration working until paginated history is implemented by Codex. */
+    readonly historyMode?: "legacy";
   };
 }
 

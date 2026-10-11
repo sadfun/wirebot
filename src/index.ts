@@ -1,10 +1,13 @@
 import { join } from "node:path";
 import { ScheduledRunsEngine } from "./automations/engine.js";
 import { AutomationStore } from "./automations/store.js";
+import { withWirebotSettings } from "./channels/config-fields.js";
 import { DiscordChannel } from "./channels/discord/channel.js";
 import { SlackChannel } from "./channels/slack/channel.js";
 import { TelegramChannel } from "./channels/telegram/channel.js";
+import { AutoModeRouter } from "./codex/auto-mode.js";
 import { CodexConfigService } from "./codex/config-service.js";
+import { resolveSelectedModel } from "./codex/model-settings.js";
 import { CodexAppServer } from "./codex/rpc.js";
 import { CodexRuntimeService } from "./codex/runtime-service.js";
 import { CodexService, createContainerEnvironmentContext } from "./codex/service.js";
@@ -122,6 +125,14 @@ export async function runWirebot(): Promise<void> {
       chatgptAuth === undefined ? undefined : () => Promise.resolve(chatgptAuth),
     );
     let liveRuntime: CodexRuntimeService | undefined;
+    const configService = new CodexConfigService(rpc, config.workspace);
+    const autoRouter = new AutoModeRouter(
+      rpc,
+      configService,
+      conversations,
+      () => settings.read().autoMode,
+      logger.child({ component: "auto-mode" }),
+    );
     codex = new CodexService(
       rpc,
       conversations,
@@ -133,6 +144,19 @@ export async function runWirebot(): Promise<void> {
       () => settings.read().remoteClientContext,
       {
         effectiveSettings: () => liveRuntime?.settings() ?? {},
+        autoRouting: (request) => autoRouter.route(request),
+        defaultReasoningEffort: async (model) => {
+          try {
+            return resolveSelectedModel(model, (await configService.read()).capabilities.models)
+              ?.defaultReasoningEffort;
+          } catch (error) {
+            logger.warn("Could not look up the default reasoning effort", {
+              model,
+              error: errorMessage(error),
+            });
+            return undefined;
+          }
+        },
         explicitSkillInputs: (text) => liveRuntime?.skillInputs(text) ?? [],
         ...(config.container ? { environmentContext: createContainerEnvironmentContext() } : {}),
         ...(chatgptAuth === undefined
@@ -159,7 +183,6 @@ export async function runWirebot(): Promise<void> {
       await codex.loginWithApiKey(config.codexApiKey);
       logger.info("Codex is authenticated with the API key from CODEX_API_KEY");
     }
-    const configService = new CodexConfigService(rpc, config.workspace);
     const runtime = new CodexRuntimeService({
       rpc,
       codex,
@@ -224,6 +247,9 @@ export async function runWirebot(): Promise<void> {
             logger.child({ component: "telegram" }),
             publicUrl === undefined ? undefined : `${publicUrl}/miniapp`,
           );
+    const chatConfig = withWirebotSettings(configService, settings, () =>
+      runtime.afterConfigWrite(),
+    );
     const slack =
       config.slack === undefined
         ? undefined
@@ -231,7 +257,7 @@ export async function runWirebot(): Promise<void> {
             config.slack,
             join(config.workspace, ".wirebot", "attachments"),
             logger.child({ component: "slack" }),
-            publicUrl === undefined ? configService : undefined,
+            chatConfig,
           );
     const discord =
       config.discord === undefined
@@ -239,7 +265,7 @@ export async function runWirebot(): Promise<void> {
         : new DiscordChannel(
             config.discord,
             logger.child({ component: "discord" }),
-            publicUrl === undefined ? configService : undefined,
+            publicUrl === undefined ? chatConfig : undefined,
           );
     const channels = [telegram, slack, discord].filter(
       (channel): channel is NonNullable<typeof channel> => channel !== undefined,

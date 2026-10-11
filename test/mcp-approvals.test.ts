@@ -46,6 +46,7 @@ test("MCP approvals use the active user's choices and preserve Codex's approval 
       if (method !== "turn/start") throw new Error(`Unexpected RPC: ${method}`);
       const turn: Turn = {
         id: `turn-${++nextTurn}`,
+        rootTurnId: null,
         items: [],
         itemsView: "full",
         status: "inProgress",

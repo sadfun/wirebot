@@ -68,7 +68,7 @@ describe("Browser entry commands", () => {
       }
     });
   }
-  test("Telegram config keeps a Mini App button; Slack and Discord config issue browser links", async () => {
+  test("bridge config fallback keeps Telegram Mini App and other connector browser links", async () => {
     for (const provider of ["telegram", "slack", "discord"]) {
       const s = setup(provider, "config");
       await s.bridge.handleMessage(s.message);

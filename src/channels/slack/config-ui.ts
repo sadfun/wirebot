@@ -1,8 +1,8 @@
-import type { EditableConfigSnapshot } from "../../codex/config-service.js";
 import { errorMessage } from "../../shared/errors.js";
 import type { Logger } from "../../shared/logger.js";
 import {
   applyConfigValue,
+  type ChannelConfigSnapshot,
   type CodexConfigAccess,
   type ConfigFieldKey,
   fieldKey,
@@ -20,7 +20,7 @@ export const slackConfigActionPrefix = "wirebot_cfg";
  * Interactive Codex settings rendered as Slack blocks — the Slack counterpart
  * of the Telegram Mini App's settings screen. One message is edited in place:
  * an overview screen with a button per setting, and per-setting picker
- * screens whose buttons apply the change through CodexConfigService.
+ * screens whose buttons update Codex or Wirebot's Auto mode setting.
  */
 export class SlackConfigUi {
   readonly #api: SlackMessagingApi;
@@ -79,7 +79,7 @@ export class SlackConfigUi {
 }
 
 function overviewScreen(
-  snapshot: EditableConfigSnapshot,
+  snapshot: ChannelConfigSnapshot,
   status?: string,
 ): { text: string; blocks: readonly SlackBlock[] } {
   const model = overviewModel(snapshot, status);
@@ -89,6 +89,7 @@ function overviewScreen(
     ...model.fields.map((field) => `*${field.label}*: ${escapeSlackEntities(field.value)}`),
     ...model.warnings.map((warning) => escapeSlackEntities(warning)),
     `_${model.footer}_`,
+    "Use `/wirebot web` for browser settings.",
   ].join("\n");
   const buttons = model.fields.map(
     (field, index): SlackButtonElement => ({
@@ -108,7 +109,7 @@ function overviewScreen(
 }
 
 function pickerScreen(
-  snapshot: EditableConfigSnapshot,
+  snapshot: ChannelConfigSnapshot,
   field: ConfigFieldKey,
 ): { text: string; blocks: readonly SlackBlock[] } {
   const model = pickerModel(snapshot, field);

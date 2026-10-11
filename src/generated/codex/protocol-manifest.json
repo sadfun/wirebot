@@ -1,5 +1,5 @@
 {
-  "codexVersion": "0.159.0",
+  "codexVersion": "0.162.1",
   "methods": {
     "clientRequests": [
       "account/gatewayOAuth/cancel",
@@ -79,6 +79,7 @@
       "thread/attachment/add",
       "thread/attachment/list",
       "thread/attachment/remove",
+      "thread/attachmentOwner/list",
       "thread/compact/start",
       "thread/delete",
       "thread/fork",
@@ -184,6 +185,7 @@
       "thread/goal/cleared",
       "thread/goal/updated",
       "thread/name/updated",
+      "thread/prediction/updated",
       "thread/project/updated",
       "thread/queue/changed",
       "thread/realtime/closed",

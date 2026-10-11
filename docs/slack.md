@@ -13,9 +13,9 @@ What works in Slack:
   answers in a thread. Every message addressed to the bot needs a mention —
   including follow-ups in the same thread — so human discussion around it
   stays untouched. Each thread is its own Codex conversation with persistent
-  context. When first mentioned inside an existing thread, the bot reads the
-  earlier thread messages (up to 100, newest-biased) as context, so it
-  understands the discussion it was called into.
+  context. On every mention inside an existing thread, the bot reads all
+  earlier thread messages, including intervening human discussion. Auto mode
+  uses this context and the active Codex conversation to reassess effort and speed.
 - Approvals: when Codex asks for confirmation, the question arrives as Slack
   buttons.
 - Scheduled runs: results are delivered to the channel or thread that created
@@ -119,10 +119,15 @@ Open it to the whole workspace only if that is acceptable.
 Optionally, `SLACK_ADMIN_USER_IDS` (comma-separated member IDs) restricts
 instance-wide commands — `/wirebot config`, `login`, `logout`, `reload`, and
 `restart`, plus browser sign-in with `web` — to the listed users. Unset, every authorized user may
-run them. `/wirebot config` opens the web app through a private sign-in link.
-Set `PUBLIC_URL` to an HTTPS origin or use the automatic quick tunnel. Without
-either, `/wirebot config` keeps the compact in-chat settings picker. Browser
-sessions last 12 hours and retain the Slack user identity for schedule ownership.
+run them. In a bot DM, `/wirebot config` always opens Slack menu buttons:
+**Auto effort & speed**, **Model**, **Reasoning effort**, **Speed**, and access settings.
+Auto has **On/Off** buttons; manual effort or speed selections switch Auto off.
+Model and speed choices follow the account's live Codex catalog, including Ultrafast
+where available. Changes save immediately and apply to the next Codex turn.
+
+Use `/wirebot web` for the browser app through a private sign-in link. Set
+`PUBLIC_URL` to an HTTPS origin or use the automatic quick tunnel. Browser sessions
+last 12 hours and retain the Slack user identity for schedule ownership.
 
 ## 4. Configure Wirebot
 
@@ -157,12 +162,11 @@ variables set, Wirebot runs Slack-only with the same web app. Restart Wirebot an
   `continue`) only work as `/wirebot …` in the bot DM; in a channel each thread
   is its own conversation, so run them inside the thread as a mention
   (`@Wirebot /stop`).
-- **Restart with the thread carried over**: `@Wirebot new` inside a thread (or
-  plain `new` in the bot DM) starts a fresh Codex task for that conversation.
-  Your next message there carries the thread's messages from before the
-  restart — or, in the DM, the recent messages — as plain-text context (newest
-  8,000 characters), so Codex knows the discussion without the previous task's
-  memory. `@Wirebot /new` and `/wirebot new` behave the same way.
+- **Restart**: `@Wirebot new` inside a thread (or plain `new` in the bot DM)
+  starts a fresh Codex task. Channel threads still provide their full Slack
+  discussion as context on the next mention. In DMs, messages before `new`
+  are excluded, including from Auto routing. `@Wirebot /new` and `/wirebot new`
+  behave the same way.
 - **Sign-in**: if Codex is not signed in yet, `/wirebot login` in the bot DM
   returns the ChatGPT device-code link, exactly like `/login` on Telegram.
 
@@ -171,12 +175,9 @@ variables set, Wirebot runs Slack-only with the same web app. Restart Wirebot an
 - **Authorization**: messages, commands, and button clicks from users outside
   `SLACK_ALLOWED_USER_IDS` are ignored (and logged). Scheduled runs re-check
   the owner against the allowlist before every unattended execution.
-- **Thread context after a restart**: the "already read this thread" memory
-  is in-process, so the first mention after a Wirebot restart re-reads the
-  thread history. The Codex conversation itself is persisted and continues.
-- **Pending `new` carry-over**: the "replay the conversation on the next
-  message" note set by `new` is in-process too; if Wirebot restarts in between,
-  the next message starts the fresh task without the replayed context.
+- **Context after a process restart**: the active Codex conversation is persisted
+  and continues; Slack thread context is refreshed on every mention. A DM `new`
+  reset remains effective across restarts.
 - **Attachments**: inbound files are downloaded through Slack's private file
   URLs with the bot token (never sent to third-party hosts); generated files
   are uploaded back with `files.uploadV2`. Slack voice clips are transcribed

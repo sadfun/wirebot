@@ -21,6 +21,7 @@ import type {
   FeatureCapability,
   ModelCapability,
 } from "../codex/config-service.js";
+import { modelSelectionPatch, resolveSelectedModel } from "../codex/model-settings.js";
 import type { CodexRuntimeStatus } from "../codex/runtime-service.js";
 import {
   ConfigApiError,
@@ -192,7 +193,9 @@ export function settingsRailPages(snapshot: LoadedSnapshot): readonly RailSettin
   const values = snapshot.values;
   const capabilities = snapshot.capabilities;
   const model = resolveSelectedModel(values.model, capabilities.models);
-  const effort = values.model_reasoning_effort ?? model?.defaultReasoningEffort ?? null;
+  const effort = snapshot.wirebot.autoMode
+    ? "Auto"
+    : (values.model_reasoning_effort ?? model?.defaultReasoningEffort ?? null);
   const modelValue = [model?.displayName ?? values.model ?? "Default", effort]
     .filter((part): part is string => part !== null)
     .map(sentenceCaseIfCode)
@@ -366,11 +369,29 @@ function RemotePage(): ReactElement {
 
 /** The remote-session toggle saves immediately; it is not part of a draft. */
 function RemoteContextToggle(): ReactElement {
+  return (
+    <WirebotSettingToggle
+      setting="remoteClientContext"
+      label="Remote session context"
+      detail="Codex avoids host-local UI and localhost handoffs."
+    />
+  );
+}
+
+function WirebotSettingToggle({
+  setting,
+  label,
+  detail,
+}: {
+  readonly setting: "remoteClientContext" | "autoMode";
+  readonly label: string;
+  readonly detail: string;
+}): ReactElement {
   const data = useAppData();
   const [pending, setPending] = useState<boolean>();
   const [error, setError] = useState<string>();
   const snapshot = data.snapshot;
-  const current = snapshot?.wirebot.remoteClientContext ?? true;
+  const current = snapshot?.wirebot[setting] ?? true;
   const change = async (next: boolean): Promise<void> => {
     if (snapshot === undefined || pending !== undefined) return;
     setPending(next);
@@ -379,9 +400,11 @@ function RemoteContextToggle(): ReactElement {
       const loaded = await requestSnapshot("PUT", {
         expectedVersion: snapshot.version,
         values: {},
-        wirebot: { remoteClientContext: next },
+        wirebot: { [setting]: next },
       });
-      data.setSnapshot(loaded);
+      // Keep an existing draft's config values/version so concurrent config edits
+      // still conflict on Save; this request only changed Wirebot settings.
+      data.setSnapshot((current) => ({ ...(current ?? snapshot), wirebot: loaded.wirebot }));
       notifyHaptic("success");
     } catch (changeError) {
       setError(messageOf(changeError));
@@ -392,9 +415,9 @@ function RemoteContextToggle(): ReactElement {
   };
   return (
     <ToggleRow
-      id="wirebot-remote-client-context"
-      label="Remote session context"
-      detail={error ?? "Codex avoids host-local UI and localhost handoffs."}
+      id={`wirebot-${setting}`}
+      label={label}
+      detail={error ?? detail}
       checked={pending ?? current}
       busy={pending !== undefined}
       onChange={(next) => void change(next)}
@@ -628,25 +651,12 @@ function useSettingsDraft(snapshot: LoadedSnapshot): SettingsDraft {
     setDraft((current) => ({ ...current, ...patch }));
   };
   const updateModel = (value: string | null): void => {
-    const models = snapshot.capabilities.models;
     setNotice(undefined);
-    setDraft((current) => {
-      const model = resolveSelectedModel(value, models);
-      const effortSupported =
-        current.model_reasoning_effort === null ||
-        model?.supportedReasoningEfforts.some(
-          (effort) => effort.reasoningEffort === current.model_reasoning_effort,
-        ) === true;
-      const tierSupported =
-        current.service_tier === null ||
-        model?.serviceTiers.some((tier) => tier.id === current.service_tier) === true;
-      return {
-        ...current,
-        model: value,
-        model_reasoning_effort: effortSupported ? current.model_reasoning_effort : null,
-        service_tier: tierSupported ? current.service_tier : null,
-      };
-    });
+    setOverride(undefined);
+    setDraft((current) => ({
+      ...current,
+      ...modelSelectionPatch(current, value, snapshot.capabilities.models),
+    }));
   };
   const updateGranular = (key: keyof GranularApproval, value: boolean): void => {
     const next = { ...granular, [key]: value };
@@ -865,28 +875,44 @@ function ModelFields({
         options={withCurrent(models, draft.model ?? "")}
         onChange={form.updateModel}
       />
-      <ReasoningEffortField
-        model={selectedModel}
-        value={draft.model_reasoning_effort}
-        issue={primaryIssue(issues, "model_reasoning_effort")}
-        changed={"model_reasoning_effort" in changes}
-        onChange={(value) => form.updateDraft({ model_reasoning_effort: value })}
-      />
-      {serviceTiers.length === 0 ? undefined : (
-        <SelectField
-          id="config-service_tier"
-          label="Service tier"
-          hint={serviceTierDescription(selectedModel, draft.service_tier ?? "")}
-          value={draft.service_tier}
-          fallback={selectedModel?.defaultServiceTier ?? undefined}
-          issue={primaryIssue(issues, "service_tier")}
-          changed={"service_tier" in changes}
-          options={withCurrent(
-            [{ value: "", label: "Standard" }, ...serviceTiers],
-            draft.service_tier ?? "",
-          )}
-          onChange={(value) => form.updateDraft({ service_tier: value })}
+      <Group>
+        <WirebotSettingToggle
+          setting="autoMode"
+          label="Auto effort & speed"
+          detail="Reassess each message using the whole conversation. In DMs, “new” starts fresh. Changes save immediately."
         />
+      </Group>
+      {snapshot.wirebot.autoMode ? (
+        <Hint>
+          Simple questions use Low or Medium; everyday work uses High or Extra high; deep research
+          and debugging use Ultra at Standard speed. Ask for a quick answer to use Ultrafast or Fast
+          when available. Your selected model stays the same.
+        </Hint>
+      ) : (
+        <>
+          <ReasoningEffortField
+            model={selectedModel}
+            value={draft.model_reasoning_effort}
+            issue={primaryIssue(issues, "model_reasoning_effort")}
+            changed={"model_reasoning_effort" in changes}
+            onChange={(value) => form.updateDraft({ model_reasoning_effort: value })}
+          />
+          {serviceTiers.length === 0 ? undefined : (
+            <SelectField
+              id="config-service_tier"
+              label="Speed"
+              hint={serviceTierDescription(selectedModel, draft.service_tier ?? "")}
+              value={draft.service_tier}
+              issue={primaryIssue(issues, "service_tier")}
+              changed={"service_tier" in changes}
+              options={withCurrent(
+                [{ value: "", label: "Standard" }, ...serviceTiers],
+                draft.service_tier ?? "",
+              )}
+              onChange={(value) => form.updateDraft({ service_tier: value })}
+            />
+          )}
+        </>
       )}
       <Rule />
       <SelectField
@@ -1264,15 +1290,6 @@ function changedConfig(
     }
   }
   return changed as Partial<EditableCodexConfig>;
-}
-
-function resolveSelectedModel(
-  model: string | null,
-  models: readonly ModelCapability[],
-): ModelCapability | undefined {
-  return model === null || model.length === 0
-    ? (models.find((candidate) => candidate.isDefault) ?? models[0])
-    : models.find((candidate) => candidate.model === model);
 }
 
 function reasoningDescription(model: ModelCapability | undefined, effort: string): string {

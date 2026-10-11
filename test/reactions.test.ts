@@ -134,6 +134,7 @@ describe("Message reactions", () => {
         if (method === "turn/start") {
           const turn: Turn = {
             id: `turn-${++nextTurn}`,
+            rootTurnId: null,
             items: [],
             itemsView: "full",
             status: "inProgress",

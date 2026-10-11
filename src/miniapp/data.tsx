@@ -38,7 +38,9 @@ export interface AppData {
   readonly provider: string;
   readonly snapshot: LoadedSnapshot | undefined;
   readonly snapshotError: string | undefined;
-  readonly setSnapshot: (snapshot: LoadedSnapshot) => void;
+  readonly setSnapshot: (
+    snapshot: LoadedSnapshot | ((current: LoadedSnapshot | undefined) => LoadedSnapshot),
+  ) => void;
   readonly reloadSnapshot: () => void;
   readonly skills: readonly AvailableSkill[] | undefined;
   readonly skillsError: string | undefined;
@@ -92,7 +94,16 @@ export function AppDataProvider(props: AppDataProviderProps): ReactElement {
       ? schedulesOverride.value
       : schedulesLoad.value;
   const setSnapshot = useCallback(
-    (value: LoadedSnapshot): void => setSnapshotOverride({ base: snapshotLoad.value, value }),
+    (value: LoadedSnapshot | ((current: LoadedSnapshot | undefined) => LoadedSnapshot)): void => {
+      const base = snapshotLoad.value;
+      setSnapshotOverride((current) => ({
+        base,
+        value:
+          typeof value === "function"
+            ? value(current !== undefined && current.base === base ? current.value : base)
+            : value,
+      }));
+    },
     [snapshotLoad.value],
   );
   const updateSchedules = useCallback(

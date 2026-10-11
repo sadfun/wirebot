@@ -100,6 +100,7 @@ export async function startTestApp(assetDirectory?: string, includeTelegram = fa
     restart: async () => status,
     applyBankedReset: async () => "nothingToReset" as const,
   };
+  let wirebotSettings = { remoteClientContext: true, autoMode: true };
   const server = new MiniAppServer({
     host: "127.0.0.1",
     port: 0,
@@ -121,8 +122,11 @@ export async function startTestApp(assetDirectory?: string, includeTelegram = fa
       }),
     },
     settings: {
-      read: () => ({ remoteClientContext: true }),
-      update: async () => ({ remoteClientContext: true }),
+      read: () => wirebotSettings,
+      update: async (patch) => {
+        wirebotSettings = { ...wirebotSettings, ...(patch as Partial<typeof wirebotSettings>) };
+        return wirebotSettings;
+      },
     },
     scheduledRuns: {
       listForOwner: (owner) => {

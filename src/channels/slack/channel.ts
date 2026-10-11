@@ -17,6 +17,7 @@ import type {
   OutboundMessage,
   ProviderReference,
 } from "../../core/channel.js";
+import { KeyedSerialQueue } from "../../shared/async.js";
 import { trimInsertionOrdered, trimInsertionOrderedMap } from "../../shared/collections.js";
 import { errorMessage } from "../../shared/errors.js";
 import type { Logger } from "../../shared/logger.js";
@@ -30,6 +31,7 @@ import { escapeSlackEntities } from "./format.js";
 import {
   describeSlackFile,
   formatThreadContext,
+  type NormalizedSlackMessage,
   normalizeSlackMessage,
   parseSlackCommand,
   routeSlackMessage,
@@ -125,16 +127,8 @@ export class SlackChannel implements MessagingChannel {
       blocks: [],
     });
   });
-  /** Threads the bot already answered in — first mentions there skip the history fetch. */
-  readonly #engagedThreads = new Set<string>();
-  /**
-   * Conversation key → Slack ts of the `new` command that restarted it. The
-   * next ordinary message there carries the messages before that ts as
-   * context, so the fresh Codex task knows the discussion without the old
-   * task's memory.
-   */
-  readonly #restartedConversations = new Map<string, string>();
   readonly #recentEvents = new Set<string>();
+  readonly #messages = new KeyedSerialQueue();
   readonly #displayNames = new Map<string, string>();
   /**
    * Thread root → ts of the latest scheduled-run notification published there.
@@ -242,7 +236,6 @@ export class SlackChannel implements MessagingChannel {
       chars: inbound.text.length,
       attachments: inbound.attachments.length,
     });
-    if (command?.name === "new") this.rememberRestart(inbound.address.key, inbound.id);
     if (command?.name === "config" && this.#configUi !== undefined) {
       // The bridge never sees this command, so its admin gate cannot apply here.
       if (!inbound.isAdmin) {
@@ -343,11 +336,62 @@ export class SlackChannel implements MessagingChannel {
   }
 
   private async handleMessageEvent(event: SlackMessageEvent): Promise<void> {
+    const botUserId = this.#botUserId;
+    if (
+      botUserId === undefined ||
+      typeof event.channel !== "string" ||
+      typeof event.ts !== "string"
+    )
+      return;
+    if (this.wasRecentlyProcessed(`message:${event.channel}:${event.ts}`)) return;
+    const route = routeSlackMessage(event, botUserId);
+    if (route === undefined) return;
+    const normalized = normalizeSlackMessage(event, botUserId);
+    const work = () => this.processMessageEvent(event, normalized);
+    // Reserve arrival order before any history, membership, or attachment I/O.
+    // Commands bypass the turn queue so stop/new remain immediately available.
+    if (normalized.files.length === 0 && parseSlackCommand(normalized.text) !== undefined) {
+      await work();
+      return;
+    }
+    const key = `${event.channel}:${route.conversationSuffix}`;
+    const startsQueued = this.#messages.isBusy(key);
+    let waiting = true;
+    const queued = this.#messages.run(key, async () => {
+      waiting = false;
+      await work();
+    });
+    const acknowledge = async () => {
+      if (
+        startsQueued &&
+        event.user !== undefined &&
+        (await this.isUserAllowed(event.user)) &&
+        waiting
+      ) {
+        await this.#api
+          .postMessage({
+            channel: event.channel,
+            ...(route.replyThreadTs === undefined ? {} : { threadTs: route.replyThreadTs }),
+            text: "Queued behind earlier work…",
+          })
+          .catch((error: unknown) => {
+            this.#logger.debug("Slack queued acknowledgement failed", {
+              error: errorMessage(error),
+            });
+          });
+      }
+    };
+    await Promise.all([queued, acknowledge()]);
+  }
+
+  private async processMessageEvent(
+    event: SlackMessageEvent,
+    normalized: NormalizedSlackMessage,
+  ): Promise<void> {
     const handler = this.#handler;
     const botUserId = this.#botUserId;
     if (handler === undefined || botUserId === undefined) return;
     if (typeof event.channel !== "string" || typeof event.ts !== "string") return;
-    if (this.wasRecentlyProcessed(`message:${event.channel}:${event.ts}`)) return;
 
     const route = routeSlackMessage(event, botUserId);
     const sender = event.user;
@@ -357,7 +401,6 @@ export class SlackChannel implements MessagingChannel {
       return;
     }
 
-    const normalized = normalizeSlackMessage(event, botUserId);
     const directory = join(this.#attachmentDirectory, crypto.randomUUID());
     const attachments: InboundAttachment[] = [];
     const failures: string[] = [];
@@ -397,18 +440,7 @@ export class SlackChannel implements MessagingChannel {
       }
       return;
     }
-    const threadKey = `${event.channel}:${route.conversationSuffix}`;
-    const threadWasEngaged = this.#engagedThreads.has(threadKey);
-    if (event.channel_type !== "im") {
-      this.rememberEngagedThread(threadKey);
-    }
-    const contextualText = await this.withThreadContext(
-      event,
-      botUserId,
-      `slack:${threadKey}`,
-      threadWasEngaged,
-      text,
-    );
+    const contextualText = await this.withThreadContext(event, botUserId, text);
     const senderName = await this.displayName(sender);
     const responder = new SlackResponder(
       this.#api,
@@ -450,6 +482,7 @@ export class SlackChannel implements MessagingChannel {
         displayName: senderName,
       },
       text: contextualText,
+      requestText: text,
       attachments,
       isAdmin: this.isAdmin(sender),
       responder,
@@ -470,25 +503,17 @@ export class SlackChannel implements MessagingChannel {
   }
 
   /**
-   * A first mention inside an existing thread calls the bot into a running
-   * discussion; fetch the earlier messages so Codex sees what it is about.
+   * Every mention sees the complete Slack thread, including intervening human
+   * discussion. DMs rely on the active Codex thread, which `new` resets.
    * Commands stay bare — a context prefix would defeat command parsing.
    */
   private async withThreadContext(
     event: SlackMessageEvent,
     botUserId: string,
-    conversationKey: string,
-    threadWasEngaged: boolean,
     text: string,
   ): Promise<string> {
-    const restartTs = this.#restartedConversations.get(conversationKey);
-    if (restartTs !== undefined && parseSlackCommand(text) === undefined) {
-      this.#restartedConversations.delete(conversationKey);
-      return await this.withRestartContext(event, botUserId, restartTs, text);
-    }
     if (
       event.channel_type === "im" ||
-      threadWasEngaged ||
       event.thread_ts === undefined ||
       event.thread_ts === event.ts ||
       event.text?.includes(`<@${botUserId}>`) !== true ||
@@ -497,52 +522,21 @@ export class SlackChannel implements MessagingChannel {
       return text;
     }
     try {
-      const replies = await this.#api.fetchThreadReplies(event.channel, event.thread_ts, 100);
+      const replies = await this.#api.fetchThreadReplies(
+        event.channel,
+        event.thread_ts,
+        Number.POSITIVE_INFINITY,
+      );
       const context = formatThreadContext(
         replies,
         event.ts,
         await this.nameResolver(replies, botUserId),
+        Number.POSITIVE_INFINITY,
       );
       if (context === undefined) return text;
       return `[Context — earlier messages in this Slack thread:]\n${context}\n[End of thread context]\n\n${text}`;
     } catch (error) {
       this.#logger.warn("Could not fetch Slack thread context", {
-        threadTs: event.thread_ts,
-        error: errorMessage(error),
-      });
-      return text;
-    }
-  }
-
-  /**
-   * First ordinary message after `new`: replay the conversation as it stood
-   * before the restart — the thread's replies, or the DM's recent messages —
-   * so the fresh Codex task starts informed but without the old task's memory.
-   */
-  private async withRestartContext(
-    event: SlackMessageEvent,
-    botUserId: string,
-    restartTs: string,
-    text: string,
-  ): Promise<string> {
-    const isDirect = event.channel_type === "im";
-    try {
-      const messages = isDirect
-        ? await this.#api.fetchHistory(event.channel, restartTs, 100)
-        : await this.#api.fetchThreadReplies(event.channel, event.thread_ts ?? event.ts, 100);
-      const context = formatThreadContext(
-        messages,
-        event.ts,
-        await this.nameResolver(messages, botUserId),
-        undefined,
-        restartTs,
-      );
-      if (context === undefined) return text;
-      const scope = isDirect ? "conversation" : "thread";
-      return `[Context — messages in this Slack ${scope} before the session restart, for reference only; the previous Codex task's memory is gone:]\n${context}\n[End of ${scope} context]\n\n${text}`;
-    } catch (error) {
-      this.#logger.warn("Could not fetch Slack context after a restart", {
-        channel: event.channel,
         threadTs: event.thread_ts,
         error: errorMessage(error),
       });
@@ -571,14 +565,6 @@ export class SlackChannel implements MessagingChannel {
         : message.bot_id !== undefined
           ? "bot"
           : "unknown";
-  }
-
-  private rememberRestart(conversationKey: string, messageId: string): void {
-    // Slash commands carry no message ts; "now" still excludes the restart itself.
-    const ts = /^\d+\.\d+$/u.test(messageId) ? messageId : (Date.now() / 1_000).toFixed(6);
-    this.#restartedConversations.delete(conversationKey);
-    this.#restartedConversations.set(conversationKey, ts);
-    trimInsertionOrderedMap(this.#restartedConversations, engagedThreadLimit);
   }
 
   private async handleSlashCommand(payload: SlackSlashCommandPayload): Promise<void> {
@@ -746,7 +732,6 @@ export class SlackChannel implements MessagingChannel {
     const threadRoot = payload.message?.thread_ts ?? messageTs;
     const conversationSuffix = isDirect ? "main" : threadRoot;
     const replyThreadTs = isDirect ? undefined : threadRoot;
-    if (!isDirect) this.rememberEngagedThread(`${channelId}:${conversationSuffix}`);
     const actorName = await this.displayName(userId);
     const responder = new SlackResponder(
       this.#api,
@@ -855,12 +840,6 @@ export class SlackChannel implements MessagingChannel {
     this.#recentEvents.add(key);
     trimInsertionOrdered(this.#recentEvents, recentEventLimit);
     return false;
-  }
-
-  private rememberEngagedThread(key: string): void {
-    this.#engagedThreads.delete(key);
-    this.#engagedThreads.add(key);
-    trimInsertionOrdered(this.#engagedThreads, engagedThreadLimit);
   }
 }
 

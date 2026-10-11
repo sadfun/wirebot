@@ -189,9 +189,9 @@ Telegram's hosted Bot API only allows bots to download files up to 20 MB and upl
 
 ## Slack connector
 
-Wirebot can additionally bridge Codex into Slack over [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode) — no public URL required. Direct messages stream progress like the Telegram private chat; in channels the bot answers mentions in threads, with each thread acting as its own Codex conversation. Approvals arrive as buttons, files flow in both directions, and commands are available as `/wirebot <subcommand>` (Slack reserves bare `/new`-style messages for its own slash-command system). `@Wirebot new` in a thread, or `new` in the bot DM, restarts that conversation's Codex task and replays the messages before the restart into the next turn as plain-text context. Scheduled runs created from Slack notify back into the originating channel or thread.
+Wirebot can additionally bridge Codex into Slack over [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode) — no public URL required. Direct messages stream progress like the Telegram private chat; in channels the bot answers mentions in threads, with each thread acting as its own Codex conversation. Approvals arrive as buttons, files flow in both directions, and commands are available as `/wirebot <subcommand>` (Slack reserves bare `/new`-style messages for its own slash-command system). `@Wirebot new` in a thread, or `new` in the bot DM, restarts that conversation's Codex task. Channel threads retain their full Slack history as context; DMs start fresh after `new`. Scheduled runs created from Slack notify back into the originating channel or thread.
 
-Set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_ALLOWED_USER_IDS` together to enable it. [docs/slack.md](docs/slack.md) walks through creating the Slack app from a pasteable manifest, collecting both tokens, and first steps. Admins can open the full web app using `/wirebot config` or `/wirebot web` in a bot DM. No Telegram account is needed.
+Set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_ALLOWED_USER_IDS` together to enable it. [docs/slack.md](docs/slack.md) walks through creating the Slack app from a pasteable manifest, collecting both tokens, and first steps. Admins can open native settings using `/wirebot config`, or the full web app using `/wirebot web`, in a bot DM. No Telegram account is needed.
 
 ## Discord connector
 
@@ -230,7 +230,7 @@ Wirebot's design rule is to use Codex's native app-server behavior instead of bu
 
 Open `https://your-wirebot-origin/app` in a normal browser. Settings, Skills, and Schedules have bookmarkable URLs at `/app/settings`, `/app/skills`, and `/app/schedules`, and so do their detail pages: `/app/settings/model`, `/app/settings/access`, `/app/settings/features`, `/app/settings/environment`, `/app/settings/remote`, `/app/skills/<name>`, `/app/schedules/<id>`, and `/app/schedules/new`; `/` and the existing `/miniapp` URL work too. Wide browsers (900px and up) use a left rail that lists the Settings pages with their current values and shows usage limits, and open Skills and Schedules as a list beside the detail. Phones use bottom navigation on the three tab roots; sub-pages drop the tab bar in favor of a back link and a single bottom action, so a Save button never stacks on the tab bar. Browser colors follow the system light/dark preference, independently of Telegram. Mobile layouts support safe areas, dynamic viewport height, readable form controls, and pinch zoom.
 
-For browser sign-in, send `/wirebot web` (or `/wirebot config`) in a private Slack or Discord bot chat; Telegram users can send `/web`. The bot replies with a private, one-use link that expires in 5 minutes. Open it in your preferred browser. Requesting a new link invalidates your previous unused link. After signing in, ordinary URLs work for 12 hours, including across reloads and new tabs. **Sign out** revokes that browser session; restarting Wirebot invalidates all links and sessions.
+For browser sign-in, send `/wirebot web` in a private Slack or Discord bot chat; Telegram users can send `/web`. The bot replies with a private, one-use link that expires in 5 minutes. Open it in your preferred browser. Requesting a new link invalidates your previous unused link. After signing in, ordinary URLs work for 12 hours, including across reloads and new tabs. **Sign out** revokes that browser session; restarting Wirebot invalidates all links and sessions. In Slack, `/wirebot config` always opens the native menu buttons, including Auto effort & speed, model, manual effort, and the available speed tiers. Button changes save immediately and apply to the next Codex turn. Discord also accepts `/wirebot config` for browser sign-in when the web app is available.
 
 Browser access follows the connector's bot-admin policy, not Slack workspace or Discord server roles: `SLACK_ADMIN_USER_IDS` and `DISCORD_ADMIN_USER_IDS` restrict access when configured, and otherwise every authorized user is an admin. All Telegram allowlisted users are admins. The server rechecks authorization when issuing links, exchanging them, and using a session (Slack workspace membership uses its existing 10-minute cache). Link secrets live in URL fragments, are removed from the address bar on load, and are exchanged for Secure, HttpOnly, SameSite cookies. Serve the public app over HTTPS and keep login links private. Browser auth uses no Telegram SDK, localStorage, or third-party authentication service.
 
@@ -247,9 +247,40 @@ The Settings tab opens as a summary: usage limits, the Codex configuration pages
 
 Choices come from the running app-server and active configuration layers instead of a handwritten catalog. Codex itself is the validator: a save is a version-checked `config/batchWrite`, so all changes either pass Codex validation and land together or leave `config.toml` untouched. The app-server runs with `--strict-config`, so unknown configuration keys fail loudly.
 
+In **Settings → Model**, choose an available model (including GPT-6.1 Sol, GPT-6 Astra,
+GPT-6 Sol, and GPT-6 Luna). **Auto effort & speed** is on by default and reassesses
+each message using the full current Codex conversation, including previous turns.
+Slack mentions also include the entire Slack thread, including intervening human messages.
+In DMs, `new` starts a fresh context; messages before it are not replayed.
+
+| Request | Auto effort | Auto speed |
+|---|---|---|
+| Simple facts, translations | Low | Standard |
+| Ordinary questions | Medium | Standard |
+| Average tasks / complex work | High / Extra high | Standard |
+| Deep research / debugging | Ultra (or the model's highest supported level) | Standard |
+| Explicit request to work quickly | Appropriate to the task | Ultrafast, then Fast, then Standard, according to availability |
+
+Routing uses a separate, ephemeral **GPT-6.1 Sol / Low / Fast** turn through the
+existing Codex subscription sign-in, with host capabilities, tools, and MCP servers disabled.
+It consumes subscription usage. If the classifier is unavailable, times out, or fails,
+Wirebot uses local routing; a simple “continue” can reuse the last decision. The selected
+answering model stays unchanged. Scheduled runs keep their configured settings.
+Wirebot does not call the [Decisions API](https://developers.openai.com/api/docs/guides/decisions),
+which documents separate Platform API-key authentication and billing.
+
+Turn Auto off for manual reasoning and **Speed** controls. The toggle saves immediately
+and is also available in Slack/Discord in-chat settings; choosing a manual effort or speed
+there disables Auto. Fast and Ultrafast appear when Codex
+advertises them for that model and account; availability follows your plan and workspace
+settings. See [Codex speed modes](https://developers.openai.com/codex/speed) for usage
+and access details. **Ultra** reasoning and **Ultrafast** speed are separate controls.
+Switching models preserves compatible choices and resets unsupported reasoning or speed
+options to their defaults. The Slack and Discord in-chat settings follow the same rules.
+
 Wirebot keeps the running Codex process synchronized using the [app-server mechanisms designed for this purpose](https://learn.chatgpt.com/docs/app-server#api-overview):
 
-- Mini App saves hot-reload the effective user configuration and carry supported model, approval, and reasoning choices into the next turn.
+- Mini App saves hot-reload the effective user configuration and carry supported model, speed, approval, and reasoning choices into the next turn.
 - External edits to config files are applied on demand: send `/reload` or press **Apply changes** in the Mini App to run the same reconciliation. An invalid edit leaves the last healthy runtime active and shows a degraded status.
 - Skills use Codex's built-in watcher plus a forced `skills/list` refresh. Explicit `$skill-name` mentions are sent as native skill inputs.
 - MCP definitions use `config/mcpServer/reload`. Codex queues refreshed MCP state for loaded threads, so it becomes active on their next turn.
