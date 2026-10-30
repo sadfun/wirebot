@@ -43,6 +43,7 @@ import {
   isCodexTransportUnavailable,
 } from "./rpc.js";
 import {
+  dropOpenAnswers,
   type FinalizedTurn,
   silentStream,
   ThreadSession,
@@ -456,6 +457,8 @@ export class CodexService {
       return false;
     }
     view.invocation = invocation;
+    // The steer cancels the streaming response, and it may never get a replacement if a stop follows.
+    dropOpenAnswers(view);
     void invocation.reactToMessage?.("👀").catch((error: unknown) => {
       this.#logger.debug("Could not acknowledge a steered message", {
         conversationKey,

@@ -84,8 +84,10 @@ export interface TurnView extends TurnPresentation {
   readonly phases: Map<string, MessagePhase | null>;
   /** Non-commentary messages by item id, in the order they first produced text. */
   readonly answers: Map<string, AgentMessageText>;
-  /** Answers still streaming; steering cancels a response, so these may never complete. */
+  /** Messages still streaming; steering cancels a response, so these may never complete. */
   readonly openAnswers: Set<string>;
+  /** Messages cancelled mid-stream, whose late deltas must not bring them back. */
+  readonly cutOffAnswers: Set<string>;
   answerStreamed: boolean;
   readonly actions: Map<string, readonly ProgressAction[]>;
   readonly reasoning: Map<string, string[]>;
@@ -292,7 +294,7 @@ export class ThreadSession {
         if (phase === "commentary") {
           view.progressMessage += delta;
           this.publishProgress(view);
-        } else {
+        } else if (!view.cutOffAnswers.has(itemId)) {
           const answer = view.answers.get(itemId);
           view.answers.set(itemId, { phase, text: (answer?.text ?? "") + delta });
           view.openAnswers.add(itemId);
@@ -401,6 +403,7 @@ export class ThreadSession {
       phases: new Map(),
       answers: new Map(),
       openAnswers: new Set(),
+      cutOffAnswers: new Set(),
       answerStreamed: false,
       actions: new Map(),
       reasoning: new Map(),
@@ -431,8 +434,8 @@ export class ThreadSession {
     if (item.type === "agentMessage") {
       if (lifecycle === "started") {
         // A newer message means the response streaming the open answers was cancelled.
-        for (const id of view.openAnswers) view.answers.delete(id);
-        view.openAnswers.clear();
+        dropOpenAnswers(view);
+        view.openAnswers.add(item.id);
       } else {
         view.openAnswers.delete(item.id);
       }
@@ -536,6 +539,15 @@ export class ThreadSession {
   }
 }
 
+/** Forget messages whose response was cancelled, including any deltas still on their way. */
+export function dropOpenAnswers(view: TurnView): void {
+  for (const id of view.openAnswers) {
+    view.answers.delete(id);
+    view.cutOffAnswers.add(id);
+  }
+  view.openAnswers.clear();
+}
+
 /** What the user can do about a failure, for the errors Wirebot's own commands can fix. */
 function failureHint(
   info: CodexErrorInfo | null | undefined,
@@ -549,10 +561,8 @@ function failureHint(
       return `Change the service tier with ${commandText("config")}.`;
     case "contextWindowExceeded":
       return `Free up space with ${commandText("compact")}, or start over with ${commandText("new")}.`;
-    case "usageLimitExceeded":
-      return `Usage limits and any banked resets are in ${commandText("config")}.`;
     case "tooManyDenials":
-      return `Review Access & approvals in ${commandText("config")}.`;
+      return `Review the approval and sandbox settings with ${commandText("config")}.`;
     case "unauthorized":
       return `Sign in again with ${commandText("login")}.`;
     default:
