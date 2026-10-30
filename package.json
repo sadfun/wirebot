@@ -3,7 +3,7 @@
   "version": "0.4.0",
   "private": true,
   "type": "module",
-  "packageManager": "bun@1.4.0",
+  "packageManager": "bun@1.4.4",
   "description": "Wirebot — a Telegram, Slack, and Discord bridge for the OpenAI Codex app-server.",
   "license": "MIT",
   "homepage": "https://github.com/sadfun/wirebot#readme",
@@ -15,7 +15,7 @@
     "url": "git+https://github.com/sadfun/wirebot.git"
   },
   "engines": {
-    "bun": ">=1.4.0"
+    "bun": ">=1.4.4"
   },
   "scripts": {
     "build": "bun scripts/build-assets.ts && tailwindcss -i ./src/miniapp/styles.css -o ./dist/miniapp/public/app.css --minify",
@@ -43,7 +43,6 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.3.0",
-    "undici-real": "npm:undici@^7.29.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {
@@ -55,8 +54,5 @@
     "@types/react-dom": "^18.3.7",
     "tailwindcss": "^4.1.11",
     "typescript": "7.0.2"
-  },
-  "patchedDependencies": {
-    "@slack/socket-mode@3.0.0": "patches/@slack%2Fsocket-mode@3.0.0.patch"
   }
 }

@@ -24,6 +24,9 @@ All notable changes to Wirebot are documented in this file.
 - Slack and Discord post the final answer as a new message and then delete the progress message,
   instead of editing the answer into it. Messengers don't notify on edits, so the answer now
   notifies like any other message, and it lands below any follow-ups sent during the turn.
+- The project now requires Bun 1.4.4 across local development, CI, release builds, and Docker.
+- Slack Socket Mode runs on the unmodified `@slack/socket-mode` package. Bun 1.4.4's undici now
+  supports WebSocket pings, so the `undici-real` alias and the package patch are gone.
 
 ## [0.3.6] - 2026-09-29
 

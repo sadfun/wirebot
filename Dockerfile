@@ -3,12 +3,11 @@
 # Build stage: compiles the Mini App assets, the wirebot executable, and
 # downloads the pinned Codex CLI for the target architecture. Runs on the
 # build platform and cross-compiles, so no emulation is needed here.
-FROM --platform=$BUILDPLATFORM oven/bun:1.4.0 AS build
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.4 AS build
 ARG TARGETARCH
 WORKDIR /app
 
 COPY package.json bun.lock ./
-COPY patches ./patches
 RUN bun install --frozen-lockfile
 
 COPY codex.version tsconfig.json ./
