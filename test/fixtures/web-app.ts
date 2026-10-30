@@ -85,6 +85,7 @@ export async function startTestApp(assetDirectory?: string, includeTelegram = fa
       weekly: { remainingPercent: 78, resetsAt: null },
       fiveHour: { remainingPercent: 94, resetsAt: null },
       bankedResets: null,
+      ordinaryUsageAllowed: true,
     }),
     skills: () => [
       {

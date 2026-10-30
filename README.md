@@ -160,6 +160,10 @@ The two are mutually exclusive.
 
 Voice messages use that same ChatGPT subscription. Wirebot briefly shows a **Transcribing…** thinking block, sends the OGG recording to ChatGPT's Codex dictation service, and then starts the normal Codex turn with both the transcript and original attachment. The pinned, checksum-verified browser-compatible HTTP transport is bundled in the image.
 
+## Follow-up messages
+
+A message you send while Codex is working on your own turn joins that turn straight away, and Wirebot marks it with 👀. Codex cancels the response it was writing and carries on with your follow-up, and you get one reply covering both. Everything else waits in the queue and starts its own turn: messages from someone else in a group, replies to a scheduled run, messages sent after `/stop`, and anything behind a message that is already queued.
+
 ## Telegram commands
 
 | Command      | Effect                                                                                           |
@@ -261,15 +265,15 @@ If the app-server exits on its own — for example the kernel OOM-killer or a st
 ### Message reactions
 
 Wirebot automatically connects a private localhost MCP server using MCP 2026-07-28.
-Its `react_to_last_message(reaction)` tool targets the message the active turn is answering.
+Its `react_to_last_message(reaction)` tool targets the latest message the active turn is answering.
 Routing uses Codex's thread/turn metadata; no message identifiers are added to prompts.
 The default messenger context encourages Codex to react when it fits the conversation.
-Empty answers send no reply, so a reaction can stand on its own; Slack and Discord progress
-messages are deleted when there is no final text.
+Empty answers send no reply, so a reaction can stand on its own. Slack and Discord delete their
+progress message when the turn ends and post any answer as a new message.
 Wirebot preapproves all tools from its own MCP server. Other MCP tool approvals use
 the messenger's Allow once, Allow for session (when supported), and Deny buttons.
-Queued messages cannot retarget a running turn. Scheduled runs and calls after a turn
-ends have no reaction target.
+A follow-up that joins the turn becomes the new target; queued messages do not. Scheduled
+runs and calls after a turn ends have no reaction target.
 
 Reactions add the bot's emoji on Slack and Discord, and replace its single reaction on Telegram.
 Unsupported emoji and missing permissions return a tool error without substituting another emoji.

@@ -195,6 +195,9 @@ function RefreshLink(): ReactElement {
   );
 }
 
+/** Stated outright because the backend's answer can't be read from the percentages. */
+const usageBlockedText = "Included usage isn't available on this account right now.";
+
 /** The Usage card on the phone Settings home. */
 export function UsageCard(): ReactElement {
   const { usage } = useAppData();
@@ -243,6 +246,9 @@ export function UsageCard(): ReactElement {
     <section className="section">
       <SectionLabel action={<RefreshLink />}>Usage</SectionLabel>
       {flow.notice === undefined ? undefined : <Notice tone="success">{flow.notice}</Notice>}
+      {usage.value?.ordinaryUsageAllowed === false ? (
+        <Notice tone="warning">{usageBlockedText}</Notice>
+      ) : undefined}
       <Group aria-live="polite">{body}</Group>
       {usage.value !== undefined && usage.error !== undefined ? (
         <Hint className="hint-error">{`Could not refresh: ${usage.error}`}</Hint>
@@ -272,6 +278,9 @@ export function UsageRail(): ReactElement {
           <UsageWindow key={label} label={label} window={window} compact />
         ))
       )}
+      {usage.value?.ordinaryUsageAllowed === false ? (
+        <div className="railUsage-note railUsage-error">{usageBlockedText}</div>
+      ) : undefined}
       {flow.count > 0 ? (
         <button type="button" className="railUsage-reset" onClick={flow.start}>
           <span>{`${flow.count} banked reset${flow.count === 1 ? "" : "s"}`}</span>
