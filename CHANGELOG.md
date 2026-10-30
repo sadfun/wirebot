@@ -4,6 +4,8 @@ All notable changes to Wirebot are documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-30
+
 ### Added
 
 - A message sent while Codex is working on your own turn now joins that turn immediately, marked
