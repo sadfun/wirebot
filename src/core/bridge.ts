@@ -655,9 +655,13 @@ function accountSummary(account: Account): string {
     case "apiKey":
       return "authenticated with an OpenAI API key";
     case "chatgpt":
-      return `signed in to ChatGPT (${account.planType})`;
+      return account.workspaceName === null
+        ? `signed in to ChatGPT (${account.planType})`
+        : `signed in to ChatGPT (${account.planType}, ${account.workspaceName})`;
     case "amazonBedrock":
       return "authenticated through Amazon Bedrock";
+    case "gcp":
+      return "authenticated through Google Cloud";
   }
 }
 

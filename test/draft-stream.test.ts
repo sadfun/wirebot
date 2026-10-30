@@ -10,7 +10,6 @@ class RecordingDraftStream extends DraftReplyStream {
   public readonly deletions: string[] = [];
   public readonly attachments: OutboundAttachment[] = [];
   public initialPost = Promise.resolve("message-1");
-  public failUpdates = false;
   public failDeletion = false;
 
   public constructor(limit = 100) {
@@ -27,7 +26,6 @@ class RecordingDraftStream extends DraftReplyStream {
   }
 
   protected async update(_messageId: string, content: string): Promise<void> {
-    if (this.failUpdates) throw new Error("update failed");
     this.updates.push(content);
   }
 
@@ -50,15 +48,16 @@ class RecordingDraftStream extends DraftReplyStream {
 }
 
 describe("DraftReplyStream", () => {
-  it("posts one thinking block and replaces it with the final answer", async () => {
+  it("posts the final answer as a new message and deletes the thinking block", async () => {
     const stream = new RecordingDraftStream();
 
     await stream.start({ summary: "Thinking…", actions: [], plan: [] });
     expect(stream.posts).toEqual(["▌ Thinking…"]);
 
     await stream.complete("Finished");
-    expect(stream.updates).toEqual(["Finished"]);
-    expect(stream.posts).toEqual(["▌ Thinking…"]);
+    expect(stream.updates).toEqual([]);
+    expect(stream.posts).toEqual(["▌ Thinking…", "Finished"]);
+    expect(stream.deletions).toEqual(["message-1"]);
   });
 
   it("keeps the thinking placeholder until the complete answer is available", async () => {
@@ -71,26 +70,28 @@ describe("DraftReplyStream", () => {
     expect(stream.updates).toEqual([]);
   });
 
-  it("posts only overflow chunks after replacing the thinking message", async () => {
+  it("posts every chunk of a long answer as a new message", async () => {
     const stream = new RecordingDraftStream(10);
 
     await stream.start();
     await stream.complete("1234567890abcdefghij");
 
-    expect(stream.updates).toEqual(["1234567890"]);
-    expect(stream.posts.slice(1)).toEqual(["abcdefghij"]);
+    expect(stream.updates).toEqual([]);
+    expect(stream.posts.slice(1)).toEqual(["1234567890", "abcdefghij"]);
+    expect(stream.deletions).toEqual(["message-1"]);
   });
 
-  it("posts the complete answer when replacing the thinking message fails", async () => {
+  it("still delivers the answer when the thinking message can't be deleted", async () => {
     const stream = new RecordingDraftStream();
 
     await stream.start();
     stream.appendFinal("Partial preview");
-    stream.failUpdates = true;
+    stream.failDeletion = true;
     await stream.complete("Finished");
 
     expect(stream.updates).toEqual([]);
     expect(stream.posts).toEqual(["▌ Thinking…", "Finished"]);
+    expect(stream.deletions).toEqual(["message-1"]);
   });
 
   it("deletes progress when a turn ends without an answer", async () => {

@@ -7,10 +7,12 @@ import { DraftThrottle } from "./draft-throttle.js";
 import { formatThinkingBlock, splitMessageText } from "./progress.js";
 
 /**
- * Channel-agnostic streaming reply: one editable message that starts as
- * progress and is replaced by the final answer. Edits are throttled to one
- * per interval. Connectors supply the transport (post/update/delete) and the
- * channel-specific text rendering; all draft/lifecycle state lives here.
+ * Channel-agnostic streaming reply: one editable progress message, deleted once
+ * the final answer has been posted as a new message, because edits don't notify
+ * anyone and the answer belongs below any follow-ups sent during the turn. Edits
+ * are throttled to one per interval. Connectors supply the transport
+ * (post/update/delete) and the channel-specific text rendering; all
+ * draft/lifecycle state lives here.
  */
 export abstract class DraftReplyStream implements OutboundStream {
   static readonly #draftIntervalMs = 1_500;
@@ -45,13 +47,13 @@ export abstract class DraftReplyStream implements OutboundStream {
   /** Post the progress message and return its channel-native message id. */
   protected abstract postInitial(content: string): Promise<string>;
 
-  /** Post a follow-up message in the same conversation. */
+  /** Post part of the final answer as a new message in the same conversation. */
   protected abstract post(content: string): Promise<void>;
 
   /** Edit the progress message in place. */
   protected abstract update(messageId: string, content: string): Promise<void>;
 
-  /** Delete the progress message when the turn ends without text. */
+  /** Delete the progress message when the turn ends. */
   protected abstract remove(messageId: string): Promise<void>;
 
   /** Adapt the rendered thinking block for the channel (e.g. entity escaping). */
@@ -120,9 +122,9 @@ export abstract class DraftReplyStream implements OutboundStream {
 
   public appendFinal(_delta: string): void {
     // Keep the editable message as an unambiguous progress placeholder until
-    // complete() can replace it with the authoritative final text. If a
-    // streamed preview were published first and the final edit failed, the
-    // delivery fallback would leave that stale preview beside the full answer.
+    // complete() can post the authoritative final text. If a streamed preview
+    // were published first and the final delete failed, that stale preview
+    // would stay beside the full answer.
   }
 
   public async complete(
@@ -147,32 +149,8 @@ export abstract class DraftReplyStream implements OutboundStream {
     }
     const chunks =
       text.length === 0 ? [] : splitMessageText(this.renderFinal(text), this.#textLimit);
-    const [first, ...remaining] = chunks;
-    let chunksToPost = chunks;
-    if (this.#messageId !== undefined) {
-      if (first === undefined) {
-        try {
-          await this.remove(this.#messageId);
-        } catch (error) {
-          this.logger.warn(`${this.#channelLabel} progress message could not be deleted`, {
-            error: errorMessage(error),
-          });
-        }
-      } else if (first !== this.#lastPublishedText) {
-        try {
-          await this.update(this.#messageId, first);
-          chunksToPost = remaining;
-        } catch (error) {
-          this.logger.debug(`${this.#channelLabel} final replacement failed`, {
-            error: errorMessage(error),
-          });
-        }
-      } else {
-        chunksToPost = remaining;
-      }
-    }
     let undelivered = 0;
-    for (const chunk of chunksToPost) {
+    for (const chunk of chunks) {
       try {
         await this.post(chunk);
       } catch (error) {
@@ -186,6 +164,15 @@ export abstract class DraftReplyStream implements OutboundStream {
       await this.post(
         `⚠️ ${undelivered} part${undelivered === 1 ? "" : "s"} of the reply could not be delivered.`,
       ).catch(() => undefined);
+    }
+    if (this.#messageId !== undefined) {
+      try {
+        await this.remove(this.#messageId);
+      } catch (error) {
+        this.logger.warn(`${this.#channelLabel} progress message could not be deleted`, {
+          error: errorMessage(error),
+        });
+      }
     }
     await this.finishExtras(attachments);
   }

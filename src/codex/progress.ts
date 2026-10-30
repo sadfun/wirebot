@@ -1,19 +1,34 @@
 import { basename } from "node:path";
 import type { ProgressAction } from "../core/channel.js";
+import type { MessagePhase } from "../generated/codex/MessagePhase.js";
 import type { FileUpdateChange } from "../generated/codex/v2/FileUpdateChange.js";
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem.js";
 import type { Turn } from "../generated/codex/v2/Turn.js";
 import { capitalize, compactTruncate } from "../shared/text.js";
 
-/** Final assistant text of a turn, preferring explicit final-answer messages. */
-export function finalTextFromTurn(turn: Turn): string {
-  const messages = turn.items.filter((item) => item.type === "agentMessage");
-  const finals = messages.filter((item) => item.phase === "final_answer");
-  const selected = finals.length > 0 ? finals : messages.slice(-1);
+export interface AgentMessageText {
+  readonly phase: MessagePhase | null;
+  readonly text: string;
+}
+
+/**
+ * Text to deliver from a turn's assistant messages: every answer message in
+ * order, since a partial answer is not repeated by the final answer that
+ * follows it. Falls back to the last message when no phase marks an answer.
+ */
+export function finalTextFromMessages(messages: readonly AgentMessageText[]): string {
+  const answers = messages.filter(
+    (message) => message.phase === "partial_answer" || message.phase === "final_answer",
+  );
+  const selected = answers.length > 0 ? answers : messages.slice(-1);
   return selected
-    .map((item) => item.text)
+    .map((message) => message.text)
     .filter(Boolean)
     .join("\n\n");
+}
+
+export function finalTextFromTurn(turn: Turn): string {
+  return finalTextFromMessages(turn.items.filter((item) => item.type === "agentMessage"));
 }
 
 export function progressActions(item: ThreadItem): readonly ProgressAction[] {

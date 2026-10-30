@@ -60,6 +60,8 @@ export interface CodexUsageLimits {
   readonly weekly: CodexUsageLimitWindow | null;
   readonly fiveHour: CodexUsageLimitWindow | null;
   readonly bankedResets: CodexBankedResets | null;
+  /** Whether the backend allows included usage; null when it does not say. */
+  readonly ordinaryUsageAllowed: boolean | null;
 }
 
 export type ApplyBankedResetOutcome = "reset" | "nothingToReset" | "noCredit" | "alreadyRedeemed";
@@ -166,7 +168,10 @@ export class CodexRuntimeService {
       method: "account/rateLimits/read",
       params: undefined,
     });
-    return usageLimitsFromSnapshot(response.rateLimits, response.rateLimitResetCredits ?? null);
+    return {
+      ...usageLimitsFromSnapshot(response.rateLimits, response.rateLimitResetCredits ?? null),
+      ordinaryUsageAllowed: response.ordinaryUsageAllowed,
+    };
   }
 
   public async applyBankedReset(
@@ -484,7 +489,7 @@ export class CodexRuntimeService {
 function usageLimitsFromSnapshot(
   snapshot: RateLimitSnapshot,
   resetCredits: RateLimitResetCreditsSummary | null,
-): CodexUsageLimits {
+): Omit<CodexUsageLimits, "ordinaryUsageAllowed"> {
   let weekly: CodexUsageLimitWindow | null = null;
   let fiveHour: CodexUsageLimitWindow | null = null;
   for (const window of [snapshot.primary, snapshot.secondary]) {

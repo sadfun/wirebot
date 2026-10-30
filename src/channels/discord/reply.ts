@@ -163,7 +163,7 @@ export class DiscordResponder implements MessageResponder {
 export class DiscordReplyStream extends DraftReplyStream {
   readonly #api: DiscordMessagingApi;
   readonly #channelId: string;
-  readonly #replyToMessageId: string | undefined;
+  #replyToMessageId: string | undefined;
   readonly #initialReply: DiscordInitialReply | undefined;
 
   public constructor(
@@ -193,7 +193,14 @@ export class DiscordReplyStream extends DraftReplyStream {
   }
 
   protected async post(content: string): Promise<void> {
-    await this.#api.postMessage({ channelId: this.#channelId, content });
+    // The progress message gets deleted, so the answer's first part takes over its reply reference.
+    const replyToMessageId = this.#replyToMessageId;
+    this.#replyToMessageId = undefined;
+    await this.#api.postMessage({
+      channelId: this.#channelId,
+      content,
+      ...(replyToMessageId === undefined ? {} : { replyToMessageId }),
+    });
   }
 
   protected async update(messageId: string, content: string): Promise<void> {

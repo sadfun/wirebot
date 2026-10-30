@@ -1,15 +1,20 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import type {
-  MessageResponder,
-  OutboundAttachment,
-  OutboundStream,
-  ProgressAction,
-  ProgressPlanStep,
-  ProgressSnapshot,
+import {
+  channelTraits,
+  type MessageResponder,
+  type OutboundAttachment,
+  type OutboundStream,
+  type ProgressAction,
+  type ProgressPlanStep,
+  type ProgressSnapshot,
+  type ProviderReference,
+  sameReference,
 } from "../core/channel.js";
+import type { MessagePhase } from "../generated/codex/MessagePhase.js";
 import type { RequestId } from "../generated/codex/RequestId.js";
 import type { ServerNotification } from "../generated/codex/ServerNotification.js";
+import type { CodexErrorInfo } from "../generated/codex/v2/CodexErrorInfo.js";
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem.js";
 import type { Turn } from "../generated/codex/v2/Turn.js";
 import type { TurnInterruptResponse } from "../generated/codex/v2/TurnInterruptResponse.js";
@@ -21,7 +26,13 @@ import {
   resolveOutboundAttachments,
   unavailableAttachmentsWarning,
 } from "./output-files.js";
-import { fileChangeActions, finalTextFromTurn, progressActions } from "./progress.js";
+import {
+  type AgentMessageText,
+  fileChangeActions,
+  finalTextFromMessages,
+  finalTextFromTurn,
+  progressActions,
+} from "./progress.js";
 import type { CodexAppServer } from "./rpc.js";
 import type { CodexInvocationContext } from "./service.js";
 
@@ -65,10 +76,19 @@ interface PendingTurnStart {
   cancel(): TurnView | undefined;
 }
 
-interface TurnView extends TurnPresentation {
+export interface TurnView extends TurnPresentation {
   readonly turnId: string;
   readonly terminal: Deferred<FinalizedTurn>;
-  readonly phases: Map<string, "commentary" | "final_answer" | null>;
+  /** Follows the latest message steered into the turn. */
+  invocation: CodexInvocationContext;
+  readonly phases: Map<string, MessagePhase | null>;
+  /** Non-commentary messages by item id, in the order they first produced text. */
+  readonly answers: Map<string, AgentMessageText>;
+  /** Messages still streaming; steering cancels a response, so these may never complete. */
+  readonly openAnswers: Set<string>;
+  /** Messages cancelled mid-stream, whose late deltas must not bring them back. */
+  readonly cutOffAnswers: Set<string>;
+  answerStreamed: boolean;
   readonly actions: Map<string, readonly ProgressAction[]>;
   readonly reasoning: Map<string, string[]>;
   readonly generatedPaths: string[];
@@ -77,7 +97,6 @@ interface TurnView extends TurnPresentation {
   plan: readonly ProgressPlanStep[];
   statusSummary: string | undefined;
   progressMessage: string;
-  finalText: string;
   interrupting: Promise<void> | undefined;
 }
 
@@ -172,6 +191,17 @@ export class ThreadSession {
     return this.#views.get(turnId);
   }
 
+  /** The only running turn, when it answers this owner and has not been told to stop. */
+  public steerableView(owner: ProviderReference): TurnView | undefined {
+    if (this.#stopRequested || this.#parkedStarts.length > 0 || this.#views.size !== 1) {
+      return undefined;
+    }
+    const [view] = this.#views.values();
+    if (view?.origin !== "user" || view.interrupting !== undefined) return undefined;
+    const turnOwner = view.invocation.owner;
+    return turnOwner !== undefined && sameReference(turnOwner, owner) ? view : undefined;
+  }
+
   /** Fallback presenter for approvals on turns Wirebot did not start. */
   public defaultResponder(): MessageResponder | undefined {
     return this.#defaultResponder;
@@ -259,12 +289,19 @@ export class ThreadSession {
       case "item/agentMessage/delta": {
         const view = this.#views.get(notification.params.turnId);
         if (view === undefined) return;
-        if (view.phases.get(notification.params.itemId) === "commentary") {
-          view.progressMessage += notification.params.delta;
+        const { itemId, delta } = notification.params;
+        const phase = view.phases.get(itemId) ?? null;
+        if (phase === "commentary") {
+          view.progressMessage += delta;
           this.publishProgress(view);
-        } else {
-          view.finalText += notification.params.delta;
-          view.stream.appendFinal(notification.params.delta);
+        } else if (!view.cutOffAnswers.has(itemId)) {
+          const answer = view.answers.get(itemId);
+          view.answers.set(itemId, { phase, text: (answer?.text ?? "") + delta });
+          view.openAnswers.add(itemId);
+          view.stream.appendFinal(
+            answer === undefined && view.answerStreamed ? `\n\n${delta}` : delta,
+          );
+          view.answerStreamed = true;
         }
         return;
       }
@@ -364,6 +401,10 @@ export class ThreadSession {
       turnId,
       terminal: deferred<FinalizedTurn>(),
       phases: new Map(),
+      answers: new Map(),
+      openAnswers: new Set(),
+      cutOffAnswers: new Set(),
+      answerStreamed: false,
       actions: new Map(),
       reasoning: new Map(),
       generatedPaths: [],
@@ -371,7 +412,6 @@ export class ThreadSession {
       plan: [],
       statusSummary: undefined,
       progressMessage: "",
-      finalText: "",
       interrupting: undefined,
     };
     // Codex-initiated turns may have no awaiter; their outcome is the chat.
@@ -392,11 +432,18 @@ export class ThreadSession {
       view.statusSummary = undefined;
     }
     if (item.type === "agentMessage") {
+      if (lifecycle === "started") {
+        // A newer message means the response streaming the open answers was cancelled.
+        dropOpenAnswers(view);
+        view.openAnswers.add(item.id);
+      } else {
+        view.openAnswers.delete(item.id);
+      }
       view.phases.set(item.id, item.phase);
       if (item.phase === "commentary") {
         view.progressMessage = item.text;
       } else if (item.text.length > 0) {
-        view.finalText = item.text;
+        view.answers.set(item.id, { phase: item.phase, text: item.text });
       }
     }
     if (item.type === "reasoning") {
@@ -431,7 +478,10 @@ export class ThreadSession {
     try {
       if (turn.status === "failed") {
         const message = turn.error?.message ?? "Codex turn failed";
-        if (view.origin !== "scheduled") await view.stream.fail(message);
+        const hint = failureHint(turn.error?.codexErrorInfo, view.connector);
+        if (view.origin !== "scheduled") {
+          await view.stream.fail(hint === undefined ? message : `${message}\n\n${hint}`);
+        }
         view.terminal.resolve({
           turn,
           finalText: "",
@@ -441,7 +491,13 @@ export class ThreadSession {
         });
         return;
       }
-      const finalText = finalTextFromTurn(turn) || view.finalText;
+      // turn/completed carries only a summary of the items, without partial answers.
+      // Scheduled turns keep to it: their terminal answer alone is the schema-bound JSON.
+      const answers = finalTextFromMessages([...view.answers.values()]);
+      const finalText =
+        view.origin === "scheduled"
+          ? finalTextFromTurn(turn) || answers
+          : answers || finalTextFromTurn(turn);
       const stagingDirectory = join(this.#context.outboundDirectory, crypto.randomUUID());
       const resolution = await resolveOutboundAttachments(
         this.#context.workspace,
@@ -480,6 +536,37 @@ export class ThreadSession {
       }
       view.terminal.reject(error);
     }
+  }
+}
+
+/** Forget messages whose response was cancelled, including any deltas still on their way. */
+export function dropOpenAnswers(view: TurnView): void {
+  for (const id of view.openAnswers) {
+    view.answers.delete(id);
+    view.cutOffAnswers.add(id);
+  }
+  view.openAnswers.clear();
+}
+
+/** What the user can do about a failure, for the errors Wirebot's own commands can fix. */
+function failureHint(
+  info: CodexErrorInfo | null | undefined,
+  connector: string,
+): string | undefined {
+  const { commandText } = channelTraits(connector);
+  switch (info) {
+    case "modelNotFound":
+      return `Choose another model with ${commandText("config")}.`;
+    case "flexUnavailable":
+      return `Change the service tier with ${commandText("config")}.`;
+    case "contextWindowExceeded":
+      return `Free up space with ${commandText("compact")}, or start over with ${commandText("new")}.`;
+    case "tooManyDenials":
+      return `Review the approval and sandbox settings with ${commandText("config")}.`;
+    case "unauthorized":
+      return `Sign in again with ${commandText("login")}.`;
+    default:
+      return undefined;
   }
 }
 

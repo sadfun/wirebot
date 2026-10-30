@@ -1,5 +1,5 @@
 {
-  "codexVersion": "0.159.0",
+  "codexVersion": "0.166.0",
   "methods": {
     "clientRequests": [
       "account/gatewayOAuth/cancel",
@@ -32,6 +32,7 @@
       "externalAgentConfig/import",
       "externalAgentConfig/import/readHistories",
       "externalAgentConfig/import/recordHistory",
+      "feedback/save",
       "feedback/upload",
       "fs/copy",
       "fs/createDirectory",
@@ -79,6 +80,7 @@
       "thread/attachment/add",
       "thread/attachment/list",
       "thread/attachment/remove",
+      "thread/attachmentOwner/list",
       "thread/compact/start",
       "thread/delete",
       "thread/fork",
@@ -184,8 +186,10 @@
       "thread/goal/cleared",
       "thread/goal/updated",
       "thread/name/updated",
+      "thread/prediction/updated",
       "thread/project/updated",
       "thread/queue/changed",
+      "thread/readState/changed",
       "thread/realtime/closed",
       "thread/realtime/error",
       "thread/realtime/item/completed",
