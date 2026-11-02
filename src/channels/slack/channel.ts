@@ -641,6 +641,7 @@ export class SlackChannel implements MessagingChannel {
         key: `slack:${channelId}:main`,
         isPrivate: isDirect,
         isGuest: false,
+        deliveryTarget: slackDeliveryTarget(channelId, isDirect ? "im" : "channel"),
       },
       sender: {
         id: userId,
